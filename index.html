@@ -9,8 +9,8 @@
     <link rel="stylesheet" type="text/css" href="css/style.min.css?v=7" />
     <script type="text/javascript" src="js/script.min.js?v=21"></script>
     <script type="text/javascript" src="js/common.min.js?v=74"></script>
-    <link rel="stylesheet" type="text/css" href="css/food.min.css?v=71" />
-    <script type="text/javascript" src="js/food.min.js?v=230"></script>
+    <link rel="stylesheet" type="text/css" href="css/food.min.css?v=72" />
+    <script type="text/javascript" src="js/food.min.js?v=231"></script>
     <link rel="stylesheet" type="text/css" href="css/image.css?v=173" />
     <script>
         $(function () {
@@ -483,7 +483,7 @@
                                 </select>
                             </div>
                             <div class="input-group">
-                                <div class="inline-wrapper select-wrapper" data-toggle="tooltip" title="选择类型,过滤厨师">
+                                <div class="inline-wrapper select-wrapper input-group-first" data-toggle="tooltip" title="选择类型,过滤厨师">
                                     <select id="chk-chef-category" multiple class="selectpicker monitor-none"
                                         data-width="120px" data-dropdown-align-right='auto'
                                         data-none-selected-text="选择类型" data-selected-text-format="count"
@@ -494,6 +494,36 @@
                                         <option value="OpenTime">减时间</option>
                                         <option value="Material_Gain">加全素材</option>
                                         <option value="InvitationApearRate">江湖帖概率</option>
+                                        <option value="Global">基础修炼</option>
+                                        <option value="PriceAura">售价光环</option>
+                                        <option value="SkillAura">技法光环</option>
+                                    </select>
+                                </div>
+                                <div id="chef-global-subtype-wrapper" class="inline-wrapper select-wrapper input-group-mid" style="display:none;" data-toggle="tooltip" title="选择基础修炼细分类型">
+                                    <select id="chk-chef-global-subtype" multiple class="selectpicker monitor-none"
+                                        data-width="100px" data-dropdown-align-right='auto'
+                                        data-none-selected-text="细分类型" data-selected-text-format="count"
+                                        data-count-selected-text="{0} 细分" data-actions-box="true"
+                                        data-actions-box-only-clear="true" data-deselect-all-text="清空">
+                                        <option value="skill">技法</option>
+                                        <option value="price">菜谱售价</option>
+                                        <option value="limit">菜谱上限</option>
+                                        <option value="material">素材获得</option>
+                                        <option value="other">其他</option>
+                                    </select>
+                                </div>
+                                <div id="chef-aura-subtype-wrapper" class="inline-wrapper select-wrapper input-group-mid" style="display:none;" data-toggle="tooltip" title="选择光环技法类型">
+                                    <select id="chk-chef-aura-subtype" multiple class="selectpicker monitor-none"
+                                        data-width="100px" data-dropdown-align-right='auto'
+                                        data-none-selected-text="技法类型" data-selected-text-format="count"
+                                        data-count-selected-text="{0} 技法" data-actions-box="true"
+                                        data-actions-box-only-clear="true" data-deselect-all-text="清空">
+                                        <option value="Stirfry">炒</option>
+                                        <option value="Bake">烤</option>
+                                        <option value="Boil">煮</option>
+                                        <option value="Steam">蒸</option>
+                                        <option value="Fry">炸</option>
+                                        <option value="Knife">切</option>
                                     </select>
                                 </div>
                                 <span class="input-group-btn input-group-last">
