@@ -98,7 +98,8 @@ func verifyResult(t *testing.T, contest *Contest, gd *GameData, score int, state
 
 		// Resolve slots with computed chef values for checks A, B, C
 		slots := resolveRuleState(&rule, rs)
-		applyChefDataForRule(&rule, slots)
+		customArr := buildCustomArr(slots)
+		applyChefDataForRule(&rule, slots, getPartialChefAdds(customArr, &rule))
 
 		// Check A: chef skill requirements
 		for ci := range slots {
@@ -116,20 +117,21 @@ func verifyResult(t *testing.T, contest *Contest, gd *GameData, score int, state
 		}
 
 		// Check B: material consumption within limits
-		matPool := CloneMaterials(rule.Materials)
+		matPool := cloneMaterials(rule.Materials)
+		matIdx := buildMatIndex(matPool, nil)
 		for ci := range slots {
 			for reci := 0; reci < 3; reci++ {
 				rec := slots[ci].recipes[reci].Data
 				if rec == nil {
 					continue
 				}
-				qty := GetRecipeQuantity(rec, matPool, &rule, slots[ci].chefObj)
+				qty := getRecipeQuantity(rec, matPool, &rule, slots[ci].chefObj, matIdx)
 				actual := rs[ci].Quantities[reci]
 				if actual > qty {
 					t.Errorf("rule %d slot %d recipe %d: quantity %d exceeds available %d for %s",
 						ri, ci, reci, actual, qty, rec.Name)
 				}
-				UpdateMaterialsData(matPool, rec, actual, slots[ci].chefObj)
+				updateMaterialsData(matPool, rec, actual, slots[ci].chefObj, matIdx)
 			}
 		}
 		for _, m := range matPool {
@@ -157,8 +159,8 @@ func verifyResult(t *testing.T, contest *Contest, gd *GameData, score int, state
 		}
 
 		// 8. score recomputation matches
-		recomputed := CalcRuleScore(rules, state, ri, gd)
-		cached := CalcRuleScore(rules, state, ri, gd)
+		recomputed := calcRuleScore(rules, state, ri, gd)
+		cached := calcRuleScore(rules, state, ri, gd)
 		if recomputed != cached {
 			t.Errorf("rule %d: recomputed score %d != cached %d", ri, recomputed, cached)
 		}
@@ -173,25 +175,23 @@ func TestRealContests(t *testing.T) {
 		ids = ids[:1]
 	}
 
-	// Reduce search params for test speed.
-	saved := cfg
-	cfg.MaxDiverseSeeds = 4
-	cfg.MaxRounds = 3
-	cfg.RefineIter = 3
-	cfg.RecipeSeedK = 3
-	cfg.ChefPerSeed = 2
-	t.Cleanup(func() { cfg = saved })
+	// Reduced search params for test speed.
+	testCfg := DefaultConfig()
+	testCfg.MaxDiverseSeeds = 4
+	testCfg.MaxRounds = 3
+	testCfg.RefineIter = 3
+	testCfg.RecipeSeedK = 3
+	testCfg.ChefPerSeed = 2
 
 	for _, id := range ids {
-		id := id
 		t.Run(fmt.Sprintf("contest_%d", id), func(t *testing.T) {
 			t.Parallel()
 			contest := FindContest(input, id)
 			if contest == nil {
 				t.Fatalf("contest %d not found", id)
 			}
-			opt := NewOptimizer(contest, gd)
-			score, state, elapsed := opt.Optimize(0)
+			opt := NewOptimizer(contest, gd, testCfg)
+			score, state, elapsed := opt.Optimize()
 			t.Logf("contest %d: score=%d elapsed=%v", id, score, elapsed)
 
 			if state == nil {
