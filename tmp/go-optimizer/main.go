@@ -6,18 +6,10 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"runtime/pprof"
 	"strconv"
 	"time"
 )
-
-// ContestResult holds the score and timing for a single contest optimization run.
-type ContestResult struct {
-	Name    string `json:"name"`
-	RuleID  int    `json:"ruleId"`
-	Score   int    `json:"score"`
-	PerRule []int  `json:"perRule,omitempty"`
-	TimeMs  int64  `json:"timeMs"`
-}
 
 // BenchOutput is the JSON-serializable result of a full benchmark run.
 type BenchOutput struct {
@@ -27,19 +19,10 @@ type BenchOutput struct {
 	TotalMs int64           `json:"totalMs"`
 }
 
-func runContest(contest *Contest, gd *GameData, targetScore int) (ContestResult, SimState) {
-	opt := NewOptimizer(contest, gd)
-	score, bestState, elapsed := opt.Optimize(targetScore)
+// cfg is set once in main() and threaded through all calls.
+var cfg Config
 
-	return ContestResult{
-		Name:   contest.Name,
-		RuleID: contest.RuleID,
-		Score:  score,
-		TimeMs: elapsed.Milliseconds(),
-	}, bestState
-}
-
-func runAll(input *InputData, target int, jsonOut bool) {
+func runAll(input *InputData, jsonOut bool) {
 	gd := input.ToGameData()
 	var results []ContestResult
 	var totalMs int64
@@ -47,7 +30,7 @@ func runAll(input *InputData, target int, jsonOut bool) {
 	for i := range input.Contests {
 		c := &input.Contests[i]
 		fmt.Fprintf(os.Stderr, "[%d/%d] %s ...\n", i+1, len(input.Contests), c.Name)
-		r, bestState := runContest(c, gd, target)
+		r, bestState := runContest(c, gd, cfg)
 		results = append(results, r)
 		totalMs += r.TimeMs
 		fmt.Fprintf(os.Stderr, "  %s: %d in %.1fs\n", c.Name, r.Score, float64(r.TimeMs)/1000)
@@ -83,7 +66,7 @@ func printTable(results []ContestResult, totalMs int64) {
 	fmt.Printf("%-24s %10d %7.1fs\n", "TOTAL", totalScore, float64(totalMs)/1000)
 }
 
-func runSingle(input *InputData, ruleID int, target int, jsonOut bool) {
+func runSingle(input *InputData, ruleID int, jsonOut bool) {
 	contest := FindContest(input, ruleID)
 	if contest == nil {
 		fmt.Fprintf(os.Stderr, "contest ruleId %d not found\n", ruleID)
@@ -91,7 +74,7 @@ func runSingle(input *InputData, ruleID int, target int, jsonOut bool) {
 	}
 
 	gd := input.ToGameData()
-	r, bestState := runContest(contest, gd, target)
+	r, bestState := runContest(contest, gd, cfg)
 
 	if jsonOut {
 		enc := json.NewEncoder(os.Stdout)
@@ -99,9 +82,6 @@ func runSingle(input *InputData, ruleID int, target int, jsonOut bool) {
 		enc.Encode(r)
 	} else {
 		fmt.Printf("Contest: %s (ruleId=%d)\n", r.Name, r.RuleID)
-		for i, s := range r.PerRule {
-			fmt.Printf("  Rule %d: %d\n", i+1, s)
-		}
 		fmt.Printf("Total: %d in %.1fs\n", r.Score, float64(r.TimeMs)/1000)
 	}
 	if bestState != nil {
@@ -122,19 +102,58 @@ Flags:
 func main() {
 	jsonOut := flag.Bool("json", false, "Output results as JSON")
 	verbose := flag.Bool("verbose", false, "Print detailed search progress to stderr")
+	memprof := flag.String("memprof", "", "write memory profile to file")
+	cpuprof := flag.String("cpuprof", "", "write CPU profile to file")
+
+	// Search tuning overrides
+	seeds := flag.Int("seeds", 0, "MaxDiverseSeeds override (default 12)")
+	rounds := flag.Int("rounds", 0, "MaxRounds override (default 5)")
+	refine := flag.Int("refine", 0, "RefineIter override (default 5)")
+	recipek := flag.Int("recipek", 0, "RecipeSeedK override (default 5)")
+	chefk := flag.Int("chefk", 0, "ChefPerSeed override (default 3)")
+
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, usage)
 		flag.PrintDefaults()
 	}
 	flag.Parse()
 
+	cfg = DefaultConfig()
+	cfg.Verbose = *verbose
+	if *seeds > 0 {
+		cfg.MaxDiverseSeeds = *seeds
+	}
+	if *rounds > 0 {
+		cfg.MaxRounds = *rounds
+	}
+	if *refine > 0 {
+		cfg.RefineIter = *refine
+	}
+	if *recipek > 0 {
+		cfg.RecipeSeedK = *recipek
+	}
+	if *chefk > 0 {
+		cfg.ChefPerSeed = *chefk
+	}
+
+	if *cpuprof != "" {
+		f, err := os.Create(*cpuprof)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error creating cpu profile: %v\n", err)
+			os.Exit(1)
+		}
+		pprof.StartCPUProfile(f)
+		defer func() {
+			pprof.StopCPUProfile()
+			f.Close()
+		}()
+	}
+
 	args := flag.Args()
 	if len(args) < 2 {
 		flag.Usage()
 		os.Exit(1)
 	}
-
-	Verbose = *verbose
 
 	rawDataPath := args[0]
 	archivePath := args[1]
@@ -159,8 +178,19 @@ func main() {
 		len(input.Contests), len(input.Global.Intents), len(input.Global.Buffs))
 
 	if ruleID == 0 {
-		runAll(input, 0, *jsonOut)
+		runAll(input, *jsonOut)
 	} else {
-		runSingle(input, ruleID, 0, *jsonOut)
+		runSingle(input, ruleID, *jsonOut)
+	}
+
+	if *memprof != "" {
+		f, err := os.Create(*memprof)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error creating memory profile: %v\n", err)
+			os.Exit(1)
+		}
+		runtime.GC()
+		pprof.WriteHeapProfile(f)
+		f.Close()
 	}
 }

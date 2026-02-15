@@ -1,18 +1,19 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
+	"math"
 	"os"
 	"runtime"
-	"sort"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 )
 
-// ── Optimizer ───────────────────────────────────────────────────────
-
-// Optimizer runs a multi-phase search to find the best chef-recipe assignment for a contest.
 type Optimizer struct {
+	cfg      Config
 	rules    []Rule
 	gameData *GameData
 
@@ -25,13 +26,54 @@ type Optimizer struct {
 	ruleScoreCache []int
 	bestScore      int
 	bestSimState   SimState
+
+	// reusable scratch slices to avoid per-call allocation (indexed by ID, not hash)
+	scratchUsedChefIDs  []bool // indexed by ChefID
+	scratchUsedRecIDs   []bool // indexed by RecipeID
+	scratchUsedRecLocal []bool // indexed by recipe index within a rule
+	ruleMatIndex        [][]int // per-rule material index, built once at init
+
+	// reusable scratch buffers for calcRuleScoreReuse
+	scratch ScratchBuffers
+
+	// reusable scratch buffers for getRecipeRanking / getChefRanking
+	scratchPhase1        []rough
+	scratchRecipeResults []recipeRank
+	scratchChefResults   []chefRank
 }
 
-// NewOptimizer creates an optimizer for the given contest and game data.
-func NewOptimizer(contest *Contest, gameData *GameData) *Optimizer {
+func NewOptimizer(contest *Contest, gameData *GameData, cfg Config) *Optimizer {
+	maxChefID, maxRecipeID, maxRecPerRule := 0, 0, 0
+	for ri := range contest.Rules {
+		rule := &contest.Rules[ri]
+		for ci := range rule.Chefs {
+			if rule.Chefs[ci].ChefID > maxChefID {
+				maxChefID = rule.Chefs[ci].ChefID
+			}
+		}
+		for ri2 := range rule.Recipes {
+			if rule.Recipes[ri2].RecipeID > maxRecipeID {
+				maxRecipeID = rule.Recipes[ri2].RecipeID
+			}
+		}
+		if len(rule.Recipes) > maxRecPerRule {
+			maxRecPerRule = len(rule.Recipes)
+		}
+	}
+
+	ruleMatIdx := make([][]int, len(contest.Rules))
+	for ri := range contest.Rules {
+		ruleMatIdx[ri] = buildMatIndex(contest.Rules[ri].Materials, nil)
+	}
+
 	o := &Optimizer{
-		rules:    contest.Rules,
-		gameData: gameData,
+		cfg:                 cfg,
+		rules:               contest.Rules,
+		gameData:            gameData,
+		scratchUsedChefIDs:  make([]bool, maxChefID+1),
+		scratchUsedRecIDs:   make([]bool, maxRecipeID+1),
+		scratchUsedRecLocal: make([]bool, maxRecPerRule),
+		ruleMatIndex:        ruleMatIdx,
 	}
 	o.buildMenus()
 	return o
@@ -50,8 +92,6 @@ func (o *Optimizer) buildMenus() {
 		o.menusByRule[ri] = idxs
 	}
 }
-
-// ── SimState management ─────────────────────────────────────────────
 
 func (o *Optimizer) numChefs(ri int) int {
 	if il := o.rules[ri].IntentList; il != nil {
@@ -100,8 +140,6 @@ func (o *Optimizer) markDirty(ri int) {
 	o.dirtyRules[ri] = true
 }
 
-// ── Chef / Recipe assignment ────────────────────────────────────────
-
 func (o *Optimizer) simSetChef(ri, ci, chefIdx int) {
 	o.markDirty(ri)
 	o.simState[ri][ci].ChefIdx = chefIdx
@@ -122,7 +160,7 @@ func (o *Optimizer) simSetRecipe(ri, ci, recSlot, recIdx int) {
 	if slot.ChefIdx >= 0 {
 		chef = &rule.Chefs[slot.ChefIdx]
 	}
-	qty := GetRecipeQuantity(recipe, rule.Materials, rule, chef)
+	qty := getRecipeQuantity(recipe, rule.Materials, rule, chef, o.ruleMatIndex[ri])
 	if rule.DisableMultiCookbook && qty > 1 {
 		qty = 1
 	}
@@ -136,13 +174,11 @@ func (o *Optimizer) clearSlot(ri, ci int) {
 	o.simState[ri][ci] = SlotState{ChefIdx: -1, RecipeIdxs: [3]int{-1, -1, -1}}
 }
 
-// ── Score computation ───────────────────────────────────────────────
-
 func (o *Optimizer) fastCalcScore() int {
 	total := 0
 	for ri := range o.rules {
 		if o.dirtyRules[ri] {
-			o.ruleScoreCache[ri] = CalcRuleScore(o.rules, o.simState, ri, o.gameData)
+			o.ruleScoreCache[ri] = calcRuleScoreReuse(o.rules, o.simState, ri, o.gameData, &o.scratch)
 			o.dirtyRules[ri] = false
 		}
 		total += o.ruleScoreCache[ri]
@@ -152,25 +188,23 @@ func (o *Optimizer) fastCalcScore() int {
 
 func (o *Optimizer) fastCalcRuleScore(ri int) int {
 	if o.dirtyRules[ri] {
-		o.ruleScoreCache[ri] = CalcRuleScore(o.rules, o.simState, ri, o.gameData)
+		o.ruleScoreCache[ri] = calcRuleScoreReuse(o.rules, o.simState, ri, o.gameData, &o.scratch)
 		o.dirtyRules[ri] = false
 	}
 	return o.ruleScoreCache[ri]
 }
 
-// ── Used-set helpers ────────────────────────────────────────────────
-
-// getUsedChefIdxs returns set of chef indices used across all rules,
-// excluding the slot at (excludeRI, excludeCI).
-func (o *Optimizer) getUsedChefIdxs(excludeRI, excludeCI int) map[int]bool {
-	used := make(map[int]bool)
+func (o *Optimizer) getUsedChefIdxs(excludeRI, excludeCI int) []bool {
+	used := o.scratchUsedChefIDs
+	for i := range used {
+		used[i] = false
+	}
 	for ri, rs := range o.simState {
 		for ci, slot := range rs {
 			if ri == excludeRI && ci == excludeCI {
 				continue
 			}
 			if slot.ChefIdx >= 0 {
-				// map chefId to avoid cross-rule conflicts
 				used[o.rules[ri].Chefs[slot.ChefIdx].ChefID] = true
 			}
 		}
@@ -178,12 +212,11 @@ func (o *Optimizer) getUsedChefIdxs(excludeRI, excludeCI int) map[int]bool {
 	return used
 }
 
-// getUsedRecipeIdxs returns set of recipe indices (in rule ri) that are already
-// used GLOBALLY across all rules, excluding position (excludeCI, excludeRec) in rule ri.
-// Matches JS behavior: recipes are unique across ALL guests, not just within one.
-func (o *Optimizer) getUsedRecipeIdxs(ri, excludeCI, excludeRec int) map[int]bool {
-	// collect all used recipeIDs globally
-	usedIDs := make(map[int]bool)
+func (o *Optimizer) getUsedRecipeIdxs(ri, excludeCI, excludeRec int) []bool {
+	usedIDs := o.scratchUsedRecIDs
+	for i := range usedIDs {
+		usedIDs[i] = false
+	}
 	for rri, rs := range o.simState {
 		for ci, slot := range rs {
 			for reci, idx := range slot.RecipeIdxs {
@@ -196,17 +229,17 @@ func (o *Optimizer) getUsedRecipeIdxs(ri, excludeCI, excludeRec int) map[int]boo
 			}
 		}
 	}
-	// map global recipeIDs back to local indices in rule ri
-	used := make(map[int]bool)
+	used := o.scratchUsedRecLocal
+	for i := range used {
+		used[i] = false
+	}
 	for i, r := range o.rules[ri].Recipes {
-		if usedIDs[r.RecipeID] {
+		if r.RecipeID < len(usedIDs) && usedIDs[r.RecipeID] {
 			used[i] = true
 		}
 	}
 	return used
 }
-
-// ── Skill check ─────────────────────────────────────────────────────
 
 func chefCanCook(chef *Chef, r *Recipe) bool {
 	if chef == nil || r == nil {
@@ -233,14 +266,17 @@ func chefCanCook(chef *Chef, r *Recipe) bool {
 	return true
 }
 
-// ── Recipe ranking ──────────────────────────────────────────────────
+type rough struct {
+	recIdx int
+	est    int
+}
 
 type recipeRank struct {
 	recIdx int
 	score  int
 }
 
-func (o *Optimizer) getRecipeRanking(ri, ci, recSlot, topK int, fastMode bool) []recipeRank {
+func (o *Optimizer) getRecipeRanking(ri, ci, recSlot, topK int) []recipeRank {
 	rule := &o.rules[ri]
 	menus := o.menusByRule[ri]
 	usedIdxs := o.getUsedRecipeIdxs(ri, ci, recSlot)
@@ -251,17 +287,12 @@ func (o *Optimizer) getRecipeRanking(ri, ci, recSlot, topK int, fastMode bool) [
 		chef = &rule.Chefs[slot.ChefIdx]
 	}
 
-	// save current recipe at this slot
 	savedIdx := slot.RecipeIdxs[recSlot]
 	savedQty := slot.Quantities[recSlot]
 	savedMax := slot.MaxQty[recSlot]
 
 	// Phase 1: rough estimate (price * qty)
-	type rough struct {
-		recIdx int
-		est    int
-	}
-	phase1 := make([]rough, 0, len(menus))
+	o.scratchPhase1 = o.scratchPhase1[:0]
 	for _, recIdx := range menus {
 		if usedIdxs[recIdx] {
 			continue
@@ -270,47 +301,178 @@ func (o *Optimizer) getRecipeRanking(ri, ci, recSlot, topK int, fastMode bool) [
 		if !chefCanCook(chef, recipe) {
 			continue
 		}
-		qty := GetRecipeQuantity(recipe, rule.Materials, rule, chef)
+		qty := getRecipeQuantity(recipe, rule.Materials, rule, chef, o.ruleMatIndex[ri])
 		if rule.DisableMultiCookbook && qty > 1 {
 			qty = 1
 		}
 		est := int(recipe.Price * float64(qty))
-		phase1 = append(phase1, rough{recIdx, est})
+		o.scratchPhase1 = append(o.scratchPhase1, rough{recIdx, est})
 	}
-	sort.Slice(phase1, func(i, j int) bool { return phase1[i].est > phase1[j].est })
+	phase1 := o.scratchPhase1
+	slices.SortFunc(phase1, func(a, b rough) int { return b.est - a.est })
+
+	// Phase 2: intent-aware re-ranking on top candidates
+	// Only runs when the position has recipe-dependent intents (CookSkill, Rarity, etc.)
+	needPhase2 := hasRecipeDependentIntents(rule, ci, o.gameData)
+	var phase2Size int
+	if needPhase2 {
+		if topK > 0 && topK <= 3 {
+			phase2Size = 8
+		} else {
+			phase2Size = 15
+		}
+	}
+
+	if needPhase2 && phase2Size > 0 && len(phase1) > 0 {
+		p2Limit := phase2Size
+		if p2Limit > len(phase1) {
+			p2Limit = len(phase1)
+		}
+
+		slots := resolveRuleState(rule, o.simState[ri])
+		customArr := buildCustomArr(slots)
+		applyChefDataForRule(rule, slots, getPartialChefAdds(customArr, rule))
+		slotIdx := 3*ci + recSlot
+
+		total := 3 * len(slots)
+		intentAdds := make([][]*Intent, total)
+		partialRecipeAdds := make([][]PartialAdd, total)
+
+		for i := 0; i < p2Limit; i++ {
+			recIdx := phase1[i].recIdx
+			recipe := &rule.Recipes[recIdx]
+			qty := getRecipeQuantity(recipe, rule.Materials, rule, chef, o.ruleMatIndex[ri])
+			if rule.DisableMultiCookbook && qty > 1 {
+				qty = 1
+			}
+
+			slots[ci].recipes[recSlot] = recipeSlot{Data: recipe, Quantity: qty, Max: qty}
+
+			buildCustomArrInto(slots, customArr)
+			for k := range intentAdds {
+				intentAdds[k] = intentAdds[k][:0]
+			}
+			getIntentAddsInto(ri, customArr, o.gameData, o.rules, intentAdds)
+			for k := range partialRecipeAdds {
+				partialRecipeAdds[k] = partialRecipeAdds[k][:0]
+			}
+			getPartialRecipeAddsInto(customArr, rule, partialRecipeAdds)
+
+			var ia []*Intent
+			if slotIdx < len(intentAdds) {
+				ia = intentAdds[slotIdx]
+			}
+			var pa []PartialAdd
+			if slotIdx < len(partialRecipeAdds) {
+				pa = partialRecipeAdds[slotIdx]
+			}
+
+			totalScore, _ := getRecipeScore(
+				slots[ci].chefObj, slots[ci].equipObj,
+				recipe, qty, rule,
+				&slots[ci].recipes, pa, ia,
+			)
+			actAdd := recipe.ActivityAddition
+			est2 := int(math.Ceil(toFixed2(float64(totalScore) * (1 + actAdd/100))))
+			phase1[i].est = est2
+		}
+
+		if savedIdx >= 0 {
+			slots[ci].recipes[recSlot] = recipeSlot{
+				Data: &rule.Recipes[savedIdx], Quantity: savedQty, Max: savedMax,
+			}
+		} else {
+			slots[ci].recipes[recSlot] = recipeSlot{}
+		}
+
+		slices.SortFunc(phase1, func(a, b rough) int { return b.est - a.est })
+	}
 
 	// Phase 3: precise scoring on top candidates (no artificial cap)
 	limit := len(phase1)
-	if cap := intMax(topK*2, cfg.PreFilterTop); limit > cap {
+	if cap := max(topK*2, o.cfg.PreFilterTop); limit > cap {
 		limit = cap
 	}
 
-	results := make([]recipeRank, 0, limit)
+	o.scratchRecipeResults = o.scratchRecipeResults[:0]
 	for i := 0; i < limit; i++ {
 		o.simSetRecipe(ri, ci, recSlot, phase1[i].recIdx)
-		var score int
-		if fastMode {
-			score = o.fastCalcRuleScore(ri)
-		} else {
-			score = o.fastCalcScore()
-		}
-		results = append(results, recipeRank{phase1[i].recIdx, score})
+		score := o.fastCalcRuleScore(ri)
+		o.scratchRecipeResults = append(o.scratchRecipeResults, recipeRank{phase1[i].recIdx, score})
 	}
 
-	// restore
 	slot.RecipeIdxs[recSlot] = savedIdx
 	slot.Quantities[recSlot] = savedQty
 	slot.MaxQty[recSlot] = savedMax
 	o.markDirty(ri)
 
-	sort.Slice(results, func(i, j int) bool { return results[i].score > results[j].score })
-	if topK > 0 && len(results) > topK {
-		results = results[:topK]
+	partialTopK(o.scratchRecipeResults, topK, func(a, b recipeRank) int { return b.score - a.score })
+	n := len(o.scratchRecipeResults)
+	if topK > 0 && n > topK {
+		n = topK
 	}
-	return results
+	// Return a copy — callers may hold references across nested getRecipeRanking calls
+	out := make([]recipeRank, n)
+	copy(out, o.scratchRecipeResults[:n])
+	return out
 }
 
-// ── Chef ranking ────────────────────────────────────────────────────
+func isRecipeDepCondition(ct IntentCondType) bool {
+	switch ct {
+	case IntCondCookSkill, IntCondCondimentSkill, IntCondRarity, IntCondRank, IntCondGroup:
+		return true
+	}
+	return false
+}
+
+func hasRecipeDependentIntents(rule *Rule, ci int, gameData *GameData) bool {
+	if rule.Satiety == 0 || gameData == nil {
+		return false
+	}
+
+	for _, gbID := range rule.GlobalBuffList {
+		if gbID < len(gameData.BuffByID) {
+			if buff := gameData.BuffByID[gbID]; buff != nil && isRecipeDepCondition(buff.ConditionType) {
+				return true
+			}
+		}
+	}
+
+	if ci >= len(rule.IntentList) {
+		return false
+	}
+	for _, intentID := range rule.IntentList[ci] {
+		if intentID >= len(gameData.IntentByID) {
+			continue
+		}
+		intent := gameData.IntentByID[intentID]
+		if intent == nil {
+			continue
+		}
+		if isRecipeDepCondition(intent.ConditionType) {
+			return true
+		}
+		// CreateIntent: check child intent
+		if intent.EffectType == IntEffCreateIntent {
+			childID := int(intent.EffectValue)
+			if childID < len(gameData.IntentByID) {
+				if child := gameData.IntentByID[childID]; child != nil && isRecipeDepCondition(child.ConditionType) {
+					return true
+				}
+			}
+		}
+		// CreateBuff: check child buff
+		if intent.EffectType == IntEffCreateBuff {
+			buffID := int(intent.EffectValue)
+			if buffID < len(gameData.BuffByID) {
+				if buff := gameData.BuffByID[buffID]; buff != nil && isRecipeDepCondition(buff.ConditionType) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
 
 type chefRank struct {
 	chefIdx int
@@ -318,7 +480,7 @@ type chefRank struct {
 	skillOk bool
 }
 
-func (o *Optimizer) getChefRanking(ri, ci int, fastMode bool) []chefRank {
+func (o *Optimizer) getChefRanking(ri, ci int) []chefRank {
 	rule := &o.rules[ri]
 	usedIDs := o.getUsedChefIdxs(ri, ci)
 	slot := &o.simState[ri][ci]
@@ -327,13 +489,13 @@ func (o *Optimizer) getChefRanking(ri, ci int, fastMode bool) []chefRank {
 
 	hasRecipe := slot.RecipeIdxs[0] >= 0 || slot.RecipeIdxs[1] >= 0 || slot.RecipeIdxs[2] >= 0
 
-	results := make([]chefRank, 0, len(rule.Chefs))
+	o.scratchChefResults = o.scratchChefResults[:0]
 	if !hasRecipe {
 		for idx := range rule.Chefs {
 			if !rule.Chefs[idx].Got {
 				continue
 			}
-			results = append(results, chefRank{idx, rule.Chefs[idx].Rarity, true})
+			o.scratchChefResults = append(o.scratchChefResults, chefRank{idx, rule.Chefs[idx].Rarity, true})
 		}
 	} else {
 		for idx := range rule.Chefs {
@@ -341,10 +503,9 @@ func (o *Optimizer) getChefRanking(ri, ci int, fastMode bool) []chefRank {
 			if !ch.Got {
 				continue
 			}
-			if fastMode && usedIDs[ch.ChefID] {
+			if usedIDs[ch.ChefID] {
 				continue
 			}
-			// skill check against all recipes in slot
 			ok := true
 			for reci := 0; reci < 3; reci++ {
 				ri2 := slot.RecipeIdxs[reci]
@@ -354,34 +515,26 @@ func (o *Optimizer) getChefRanking(ri, ci int, fastMode bool) []chefRank {
 				}
 			}
 			if !ok {
-				results = append(results, chefRank{idx, -1, false})
+				o.scratchChefResults = append(o.scratchChefResults, chefRank{idx, -1, false})
 				continue
 			}
 			o.simSetChef(ri, ci, idx)
-			var score int
-			if fastMode {
-				score = o.fastCalcRuleScore(ri)
-			} else {
-				score = o.fastCalcScore()
-			}
-			results = append(results, chefRank{idx, score, true})
+			score := o.fastCalcRuleScore(ri)
+			o.scratchChefResults = append(o.scratchChefResults, chefRank{idx, score, true})
 		}
-		// restore
 		o.simSetChef(ri, ci, savedChefIdx)
 	}
 
-	sort.Slice(results, func(i, j int) bool { return results[i].score > results[j].score })
-	return results
+	slices.SortFunc(o.scratchChefResults, func(a, b chefRank) int { return b.score - a.score })
+	return o.scratchChefResults
 }
-
-// ── Greedy fill ─────────────────────────────────────────────────────
 
 func (o *Optimizer) greedyFillRecipes(ri, ci int) {
 	for reci := 0; reci < 3; reci++ {
 		if o.simState[ri][ci].RecipeIdxs[reci] >= 0 {
 			continue
 		}
-		rk := o.getRecipeRanking(ri, ci, reci, 1, true)
+		rk := o.getRecipeRanking(ri, ci, reci, 1)
 		if len(rk) > 0 {
 			o.simSetRecipe(ri, ci, reci, rk[0].recIdx)
 		}
@@ -389,13 +542,11 @@ func (o *Optimizer) greedyFillRecipes(ri, ci int) {
 }
 
 func (o *Optimizer) greedyFillPosition(ri, ci int) {
-	// 1. seed recipe at slot 0
-	rk := o.getRecipeRanking(ri, ci, 0, 1, true)
+	rk := o.getRecipeRanking(ri, ci, 0, 1)
 	if len(rk) > 0 {
 		o.simSetRecipe(ri, ci, 0, rk[0].recIdx)
 	}
-	// 2. best chef
-	ck := o.getChefRanking(ri, ci, true)
+	ck := o.getChefRanking(ri, ci)
 	usedIDs := o.getUsedChefIdxs(ri, ci)
 	rule := &o.rules[ri]
 	for _, c := range ck {
@@ -405,7 +556,6 @@ func (o *Optimizer) greedyFillPosition(ri, ci int) {
 		o.simSetChef(ri, ci, c.chefIdx)
 		break
 	}
-	// 3. fill remaining recipe slots
 	o.greedyFillRecipes(ri, ci)
 }
 
@@ -416,10 +566,8 @@ func (o *Optimizer) greedyFillGuest(ri int) {
 	}
 }
 
-// ── Quick refine ────────────────────────────────────────────────────
-
 func (o *Optimizer) quickRefine(activeRules []int, light bool) {
-	maxIter := cfg.RefineIter
+	maxIter := o.cfg.RefineIter
 	skipChef := false
 	if light {
 		maxIter = 1
@@ -435,7 +583,7 @@ func (o *Optimizer) quickRefine(activeRules []int, light bool) {
 				// recipe pass
 				for reci := 0; reci < 3; reci++ {
 					curIdx := o.simState[ri][ci].RecipeIdxs[reci]
-					rk := o.getRecipeRanking(ri, ci, reci, 1, true)
+					rk := o.getRecipeRanking(ri, ci, reci, 1)
 					if len(rk) > 0 && rk[0].recIdx != curIdx {
 						o.simSetRecipe(ri, ci, reci, rk[0].recIdx)
 						changed = true
@@ -446,7 +594,7 @@ func (o *Optimizer) quickRefine(activeRules []int, light bool) {
 				}
 				// chef pass
 				curChefIdx := o.simState[ri][ci].ChefIdx
-				ck := o.getChefRanking(ri, ci, true)
+				ck := o.getChefRanking(ri, ci)
 				usedIDs := o.getUsedChefIdxs(ri, ci)
 				for _, c := range ck {
 					if !c.skillOk || usedIDs[rule.Chefs[c.chefIdx].ChefID] {
@@ -461,7 +609,7 @@ func (o *Optimizer) quickRefine(activeRules []int, light bool) {
 				// recipe pass 2 (chef may have changed)
 				for reci := 0; reci < 3; reci++ {
 					curIdx := o.simState[ri][ci].RecipeIdxs[reci]
-					rk := o.getRecipeRanking(ri, ci, reci, 1, true)
+					rk := o.getRecipeRanking(ri, ci, reci, 1)
 					if len(rk) > 0 && rk[0].recIdx != curIdx {
 						o.simSetRecipe(ri, ci, reci, rk[0].recIdx)
 						changed = true
@@ -475,8 +623,6 @@ func (o *Optimizer) quickRefine(activeRules []int, light bool) {
 	}
 }
 
-// ── Climbing ────────────────────────────────────────────────────────
-
 func (o *Optimizer) climbChefs() bool {
 	improved := false
 	for ri := range o.rules {
@@ -487,7 +633,7 @@ func (o *Optimizer) climbChefs() bool {
 			usedIDs := o.getUsedChefIdxs(ri, ci)
 			currentRS := o.fastCalcRuleScore(ri)
 
-			ck := o.getChefRanking(ri, ci, true)
+			ck := o.getChefRanking(ri, ci)
 			for _, c := range ck {
 				if usedIDs[rule.Chefs[c.chefIdx].ChefID] || c.chefIdx == curChefIdx || !c.skillOk {
 					continue
@@ -543,10 +689,28 @@ func (o *Optimizer) climbChefSwap() bool {
 				}
 			}
 
-			// swap
+			// swap — verify skill compatibility before scoring
+			chef1New := &o.rules[p1.ri].Chefs[swapIdx1]
+			chef2New := &o.rules[p2.ri].Chefs[swapIdx2]
+			slot1 := &o.simState[p1.ri][p1.ci]
+			slot2 := &o.simState[p2.ri][p2.ci]
+			canSwap := true
+			for reci := 0; reci < 3; reci++ {
+				if ri := slot1.RecipeIdxs[reci]; ri >= 0 && !chefCanCook(chef1New, &o.rules[p1.ri].Recipes[ri]) {
+					canSwap = false
+					break
+				}
+				if ri := slot2.RecipeIdxs[reci]; ri >= 0 && !chefCanCook(chef2New, &o.rules[p2.ri].Recipes[ri]) {
+					canSwap = false
+					break
+				}
+			}
+			if !canSwap {
+				continue
+			}
+
 			o.simSetChef(p1.ri, p1.ci, swapIdx1)
 			o.simSetChef(p2.ri, p2.ci, swapIdx2)
-			// recalc recipe quantities after chef swap
 			for reci := 0; reci < 3; reci++ {
 				if ri := o.simState[p1.ri][p1.ci].RecipeIdxs[reci]; ri >= 0 {
 					o.simSetRecipe(p1.ri, p1.ci, reci, ri)
@@ -560,7 +724,6 @@ func (o *Optimizer) climbChefSwap() bool {
 				o.bestSimState = cloneSimState(o.simState)
 				improved = true
 			} else {
-				// revert using original indices
 				o.simSetChef(p1.ri, p1.ci, idx1)
 				o.simSetChef(p2.ri, p2.ci, idx2)
 				for reci := 0; reci < 3; reci++ {
@@ -585,7 +748,7 @@ func (o *Optimizer) climbRecipes() bool {
 			for reci := 0; reci < 3; reci++ {
 				curRecIdx := o.simState[ri][ci].RecipeIdxs[reci]
 				currentRS := o.fastCalcRuleScore(ri)
-				rk := o.getRecipeRanking(ri, ci, reci, cfg.RecipeTopN, true)
+				rk := o.getRecipeRanking(ri, ci, reci, o.cfg.RecipeTopN)
 				for _, c := range rk {
 					if c.recIdx == curRecIdx {
 						continue
@@ -694,6 +857,71 @@ func (o *Optimizer) climbRecipeSwap() bool {
 	return improved
 }
 
+func (o *Optimizer) climbJointChefRecipe() bool {
+	improved := false
+	for ri := range o.rules {
+		rule := &o.rules[ri]
+		nc := o.numChefs(ri)
+		for ci := 0; ci < nc; ci++ {
+			savedRule := make(RuleState, nc)
+			copy(savedRule, o.simState[ri])
+			usedIDs := o.getUsedChefIdxs(ri, ci)
+			ck := o.getChefRanking(ri, ci)
+			accepted := false
+			tried := 0
+			for _, cr := range ck {
+				if tried >= 3 {
+					break
+				}
+				if !cr.skillOk || cr.chefIdx == savedRule[ci].ChefIdx || usedIDs[rule.Chefs[cr.chefIdx].ChefID] {
+					continue
+				}
+				tried++
+				copy(o.simState[ri], savedRule)
+				o.markDirty(ri)
+				o.simSetChef(ri, ci, cr.chefIdx)
+				for reci := 0; reci < 3; reci++ {
+					o.simSetRecipe(ri, ci, reci, -1)
+				}
+				for reci := 0; reci < 3; reci++ {
+					rk := o.getRecipeRanking(ri, ci, reci, 1)
+					if len(rk) > 0 {
+						o.simSetRecipe(ri, ci, reci, rk[0].recIdx)
+					}
+				}
+				for pass := 0; pass < 2; pass++ {
+					changed := false
+					for ci2 := 0; ci2 < nc; ci2++ {
+						for reci := 0; reci < 3; reci++ {
+							curIdx := o.simState[ri][ci2].RecipeIdxs[reci]
+							rk := o.getRecipeRanking(ri, ci2, reci, 1)
+							if len(rk) > 0 && rk[0].recIdx != curIdx {
+								o.simSetRecipe(ri, ci2, reci, rk[0].recIdx)
+								changed = true
+							}
+						}
+					}
+					if !changed {
+						break
+					}
+				}
+				if total := o.fastCalcScore(); total > o.bestScore {
+					o.bestScore = total
+					o.bestSimState = cloneSimState(o.simState)
+					improved = true
+					accepted = true
+					break
+				}
+			}
+			if !accepted {
+				copy(o.simState[ri], savedRule)
+				o.markDirty(ri)
+			}
+		}
+	}
+	return improved
+}
+
 func (o *Optimizer) findChefIdx(ri int, chefID int) int {
 	for i, c := range o.rules[ri].Chefs {
 		if c.ChefID == chefID {
@@ -712,10 +940,8 @@ func (o *Optimizer) findRecipeIdx(ri, recipeID int) int {
 	return -1
 }
 
-// ── Climbing phase (multi-round) ────────────────────────────────────
-
-func (o *Optimizer) runClimbing(startRound int) {
-	for round := startRound; round < cfg.MaxRounds; round++ {
+func (o *Optimizer) runClimbing() {
+	for round := 0; round < o.cfg.MaxRounds; round++ {
 		o.setSimState(cloneSimState(o.bestSimState))
 		c1 := o.climbChefs()
 		o.setSimState(cloneSimState(o.bestSimState))
@@ -729,8 +955,6 @@ func (o *Optimizer) runClimbing(startRound int) {
 		}
 	}
 }
-
-// ── Cross-guest reassignment ────────────────────────────────────────
 
 func (o *Optimizer) crossGuestReassign(activeRules []int) bool {
 	if len(activeRules) < 2 {
@@ -762,13 +986,13 @@ func (o *Optimizer) crossGuestReassign(activeRules []int) bool {
 			o.setSimState(cloneSimState(o.bestSimState))
 			o.clearSlot(targetRule, seedPos)
 
-			topRecipes := o.getRecipeRanking(targetRule, seedPos, 0, 5, true)
+			topRecipes := o.getRecipeRanking(targetRule, seedPos, 0, 5)
 			for _, rc := range topRecipes {
 				o.setSimState(cloneSimState(o.bestSimState))
 				o.clearSlot(targetRule, seedPos)
 				o.simSetRecipe(targetRule, seedPos, 0, rc.recIdx)
 
-				ck := o.getChefRanking(targetRule, seedPos, true)
+				ck := o.getChefRanking(targetRule, seedPos)
 				usedIDs := o.getUsedChefIdxs(targetRule, seedPos)
 				for _, c := range ck {
 					if !c.skillOk || usedIDs[rule.Chefs[c.chefIdx].ChefID] {
@@ -804,91 +1028,6 @@ func (o *Optimizer) crossGuestReassign(activeRules []int) bool {
 	return improved
 }
 
-// ── Full guest rebuild ──────────────────────────────────────────────
-
-func (o *Optimizer) fullGuestRebuild(activeRules []int) bool {
-	improved := false
-	for _, targetRule := range activeRules {
-		rule := &o.rules[targetRule]
-		nc := o.numChefs(targetRule)
-
-		// collect chef IDs used by other guests
-		otherUsedIDs := make(map[int]bool)
-		for ri, rs := range o.bestSimState {
-			if ri == targetRule {
-				continue
-			}
-			for _, slot := range rs {
-				if slot.ChefIdx >= 0 {
-					otherUsedIDs[o.rules[ri].Chefs[slot.ChefIdx].ChefID] = true
-				}
-			}
-		}
-
-		type chefEntry struct {
-			idx    int
-			rarity int
-		}
-		var available []chefEntry
-		for ci := range rule.Chefs {
-			if !rule.Chefs[ci].Got || otherUsedIDs[rule.Chefs[ci].ChefID] {
-				continue
-			}
-			available = append(available, chefEntry{ci, rule.Chefs[ci].Rarity})
-		}
-		sort.Slice(available, func(i, j int) bool { return available[i].rarity > available[j].rarity })
-
-		triedCombos := make(map[string]bool)
-
-		for startPos := 0; startPos < nc; startPos++ {
-			lim := 5
-			if lim > len(available) {
-				lim = len(available)
-			}
-			for fi := 0; fi < lim; fi++ {
-				o.setSimState(cloneSimState(o.bestSimState))
-				for ci := 0; ci < nc; ci++ {
-					o.clearSlot(targetRule, ci)
-				}
-				o.simSetChef(targetRule, startPos, available[fi].idx)
-				rk := o.getRecipeRanking(targetRule, startPos, 0, 1, true)
-				if len(rk) > 0 {
-					o.simSetRecipe(targetRule, startPos, 0, rk[0].recIdx)
-				}
-				o.greedyFillRecipes(targetRule, startPos)
-				for ci := 0; ci < nc; ci++ {
-					if ci != startPos {
-						o.greedyFillPosition(targetRule, ci)
-					}
-				}
-				o.quickRefine(activeRules, true)
-
-				// dedup by chef combo
-				ids := make([]int, nc)
-				for ci := 0; ci < nc; ci++ {
-					ids[ci] = o.simState[targetRule][ci].ChefIdx
-				}
-				sort.Ints(ids)
-				key := fmt.Sprint(ids)
-				if triedCombos[key] {
-					continue
-				}
-				triedCombos[key] = true
-
-				if s := o.fastCalcScore(); s > o.bestScore {
-					o.bestScore = s
-					o.bestSimState = cloneSimState(o.simState)
-					improved = true
-				}
-			}
-		}
-	}
-	o.setSimState(cloneSimState(o.bestSimState))
-	return improved
-}
-
-// ── Seed generation ─────────────────────────────────────────────────
-
 type seedCandidate struct {
 	state SimState
 	score int
@@ -907,16 +1046,19 @@ func (o *Optimizer) generateSeeds() []seedCandidate {
 		rule := &o.rules[mainRule]
 		for seedPos := 0; seedPos < nc; seedPos++ {
 			o.initSimState()
-			topRecipes := o.getRecipeRanking(mainRule, seedPos, 0, cfg.RecipeSeedK, true)
+			topRecipes := o.getRecipeRanking(mainRule, seedPos, 0, o.cfg.RecipeSeedK)
 
 			for _, seedRC := range topRecipes {
 				o.initSimState()
 				o.simSetRecipe(mainRule, seedPos, 0, seedRC.recIdx)
-				chefRanking := o.getChefRanking(mainRule, seedPos, true)
+				chefRankScratch := o.getChefRanking(mainRule, seedPos)
+				// Copy: greedyFillPosition below calls getChefRanking, reusing the scratch
+				chefRanking := make([]chefRank, len(chefRankScratch))
+				copy(chefRanking, chefRankScratch)
 
 				chefsTried := 0
 				for _, cr := range chefRanking {
-					if chefsTried >= cfg.ChefPerSeed {
+					if chefsTried >= o.cfg.ChefPerSeed {
 						break
 					}
 					if !cr.skillOk {
@@ -953,10 +1095,211 @@ func (o *Optimizer) generateSeeds() []seedCandidate {
 			}
 		}
 	}
+
 	return candidates
 }
 
-// ── Diversity selection ─────────────────────────────────────────────
+func (o *Optimizer) generateAuraSeeds() []seedCandidate {
+	activeRules := make([]int, len(o.rules))
+	for i := range activeRules {
+		activeRules[i] = i
+	}
+
+	var candidates []seedCandidate
+
+	for _, mainRule := range activeRules {
+		rule := &o.rules[mainRule]
+		nc := o.numChefs(mainRule)
+
+		type auraChef struct {
+			idx   int
+			score float64
+		}
+		var auras []auraChef
+		for ci := range rule.Chefs {
+			ch := &rule.Chefs[ci]
+			if !ch.Got {
+				continue
+			}
+			if ch.ChefID >= len(rule.CalPartialChefSet) || !rule.CalPartialChefSet[ch.ChefID] {
+				continue
+			}
+			aScore := 0.0
+			for _, eff := range ch.UltimateSkillEffect {
+				if (eff.Condition == CondScopePartial || eff.Condition == CondScopeNext) && isBasicPriceUseType(eff.Type) {
+					aScore += math.Abs(eff.Value)
+				}
+			}
+			if aScore > 0 {
+				auras = append(auras, auraChef{ci, aScore})
+			}
+		}
+		if len(auras) == 0 {
+			continue
+		}
+		slices.SortFunc(auras, func(a, b auraChef) int { return cmp.Compare(b.score, a.score) })
+		if len(auras) > 3 {
+			auras = auras[:3]
+		}
+
+		for _, ac := range auras {
+			for seedPos := 0; seedPos < nc; seedPos++ {
+				o.initSimState()
+				o.simSetChef(mainRule, seedPos, ac.idx)
+				o.greedyFillRecipes(mainRule, seedPos)
+				for ci := 0; ci < nc; ci++ {
+					if ci != seedPos {
+						o.greedyFillPosition(mainRule, ci)
+					}
+				}
+				for _, otherRule := range activeRules {
+					if otherRule != mainRule {
+						o.greedyFillGuest(otherRule)
+					}
+				}
+				score := o.fastCalcScore()
+				candidates = append(candidates, seedCandidate{
+					state: cloneSimState(o.simState),
+					score: score,
+				})
+			}
+		}
+	}
+
+	return candidates
+}
+
+func (o *Optimizer) generateMultiSkillSeeds() []seedCandidate {
+	activeRules := make([]int, len(o.rules))
+	for i := range activeRules {
+		activeRules[i] = i
+	}
+
+	var candidates []seedCandidate
+
+	for _, mainRule := range activeRules {
+		rule := &o.rules[mainRule]
+		nc := o.numChefs(mainRule)
+
+		skillSet := map[CookSkill]bool{}
+
+		for _, intentIDs := range rule.IntentList {
+			for _, intentID := range intentIDs {
+				if intentID >= len(o.gameData.IntentByID) {
+					continue
+				}
+				intent := o.gameData.IntentByID[intentID]
+				if intent == nil {
+					continue
+				}
+				if intent.ConditionType == IntCondGroup && intent.CondValSkill != CookNone {
+					skillSet[intent.CondValSkill] = true
+				}
+				if intent.EffectType == IntEffCreateBuff {
+					buffID := int(intent.EffectValue)
+					if buffID < len(o.gameData.BuffByID) {
+						if buff := o.gameData.BuffByID[buffID]; buff != nil && buff.ConditionType == IntCondGroup && buff.CondValSkill != CookNone {
+							skillSet[buff.CondValSkill] = true
+						}
+					}
+				}
+			}
+		}
+		for _, gbID := range rule.GlobalBuffList {
+			if gbID < len(o.gameData.BuffByID) {
+				if buff := o.gameData.BuffByID[gbID]; buff != nil && buff.ConditionType == IntCondGroup && buff.CondValSkill != CookNone {
+					skillSet[buff.CondValSkill] = true
+				}
+			}
+		}
+
+		if len(skillSet) < 2 {
+			continue
+		}
+
+		var skills []CookSkill
+		for s := range skillSet {
+			skills = append(skills, s)
+		}
+		slices.SortFunc(skills, func(a, b CookSkill) int { return int(a) - int(b) })
+
+		type combo struct{ skills []CookSkill }
+		var combos []combo
+		for i := 0; i < len(skills)-1; i++ {
+			for j := i + 1; j < len(skills); j++ {
+				combos = append(combos, combo{[]CookSkill{skills[i], skills[j]}})
+			}
+		}
+		if len(skills) > 2 {
+			combos = append(combos, combo{skills})
+		}
+
+		for _, cb := range combos {
+			var matching []int
+			for _, recIdx := range o.menusByRule[mainRule] {
+				recipe := &rule.Recipes[recIdx]
+				hasAll := true
+				for _, sk := range cb.skills {
+					if !recipeHasSkill(recipe, sk) {
+						hasAll = false
+						break
+					}
+				}
+				if hasAll {
+					matching = append(matching, recIdx)
+				}
+			}
+			if len(matching) < 3 {
+				continue
+			}
+			slices.SortFunc(matching, func(a, b int) int {
+				return cmp.Compare(rule.Recipes[b].Price, rule.Recipes[a].Price)
+			})
+			if len(matching) > 9 {
+				matching = matching[:9]
+			}
+
+			for seedPos := 0; seedPos < nc; seedPos++ {
+				if len(matching) < 3 {
+					continue
+				}
+
+				o.initSimState()
+				o.simSetRecipe(mainRule, seedPos, 0, matching[0])
+				o.simSetRecipe(mainRule, seedPos, 1, matching[1])
+				o.simSetRecipe(mainRule, seedPos, 2, matching[2])
+
+				ck := o.getChefRanking(mainRule, seedPos)
+				usedIDs := o.getUsedChefIdxs(mainRule, seedPos)
+				for _, c := range ck {
+					if !c.skillOk || usedIDs[rule.Chefs[c.chefIdx].ChefID] {
+						continue
+					}
+					o.simSetChef(mainRule, seedPos, c.chefIdx)
+					break
+				}
+
+				for ci := 0; ci < nc; ci++ {
+					if ci != seedPos {
+						o.greedyFillPosition(mainRule, ci)
+					}
+				}
+				for _, otherRule := range activeRules {
+					if otherRule != mainRule {
+						o.greedyFillGuest(otherRule)
+					}
+				}
+
+				score := o.fastCalcScore()
+				candidates = append(candidates, seedCandidate{
+					state: cloneSimState(o.simState),
+					score: score,
+				})
+			}
+		}
+	}
+	return candidates
+}
 
 func selectDiverseSeeds(cands []seedCandidate, maxSeeds int) []SimState {
 	if len(cands) == 0 {
@@ -1029,8 +1372,6 @@ func selectDiverseSeeds(cands []seedCandidate, maxSeeds int) []SimState {
 	return seeds
 }
 
-// ── Fingerprint dedup ───────────────────────────────────────────────
-
 func dedupSeeds(seeds []SimState) []SimState {
 	seen := make(map[string]bool)
 	var out []SimState
@@ -1063,8 +1404,6 @@ func stateFingerprint(s SimState) string {
 	return string(buf)
 }
 
-// ── Deep search per seed (runs in its own goroutine) ────────────────
-
 func (o *Optimizer) deepSearchSeed(seed SimState) (int, SimState) {
 	o.setSimState(cloneSimState(seed))
 	o.bestScore = o.fastCalcScore()
@@ -1076,9 +1415,9 @@ func (o *Optimizer) deepSearchSeed(seed SimState) (int, SimState) {
 	}
 
 	// full climbing
-	o.runClimbing(0)
-	if Verbose {
-		fmt.Fprintf(logw(), "[verbose/deep] after climbing: %d\n", o.bestScore)
+	o.runClimbing()
+	if o.cfg.Verbose {
+		fmt.Fprintf(os.Stderr, "[verbose/deep] after climbing: %d\n", o.bestScore)
 	}
 
 	// cross-guest (always attempt, no early exit)
@@ -1093,14 +1432,8 @@ func (o *Optimizer) deepSearchSeed(seed SimState) (int, SimState) {
 			o.bestSimState = cloneSimState(o.simState)
 		}
 	}
-	if Verbose {
-		fmt.Fprintf(logw(), "[verbose/deep] after cross-guest: %d\n", o.bestScore)
-	}
-
-	// full guest rebuild
-	o.fullGuestRebuild(activeRules)
-	if Verbose {
-		fmt.Fprintf(logw(), "[verbose/deep] after guest rebuild: %d\n", o.bestScore)
+	if o.cfg.Verbose {
+		fmt.Fprintf(os.Stderr, "[verbose/deep] after cross-guest: %d\n", o.bestScore)
 	}
 
 	// final recipe swap + full climbing
@@ -1110,71 +1443,270 @@ func (o *Optimizer) deepSearchSeed(seed SimState) (int, SimState) {
 		o.bestScore = s
 		o.bestSimState = cloneSimState(o.simState)
 	}
-	o.runClimbing(0)
+	o.runClimbing()
+
+	// joint chef+recipe move as final phase (after cross-guest has settled)
+	o.setSimState(cloneSimState(o.bestSimState))
+	if o.climbJointChefRecipe() {
+		o.runClimbing()
+	}
 
 	return o.bestScore, o.bestSimState
 }
 
-// ── Clone optimizer for goroutine use ───────────────────────────────
-
 func (o *Optimizer) clone() *Optimizer {
 	c := &Optimizer{
-		rules:       o.rules, // shared read-only
-		gameData:    o.gameData,
-		menusByRule: o.menusByRule,
+		cfg:                 o.cfg,
+		rules:               o.rules, // shared read-only
+		gameData:            o.gameData,
+		menusByRule:         o.menusByRule,
+		ruleMatIndex:        o.ruleMatIndex, // shared read-only
+		scratchUsedChefIDs:  make([]bool, len(o.scratchUsedChefIDs)),
+		scratchUsedRecIDs:   make([]bool, len(o.scratchUsedRecIDs)),
+		scratchUsedRecLocal: make([]bool, len(o.scratchUsedRecLocal)),
 	}
 	c.initSimState()
 	return c
 }
 
-// ── Main entry point ────────────────────────────────────────────────
+func (o *Optimizer) fillEmptySlots() {
+	usedChefIDs := make(map[int]bool)
+	for ri, rs := range o.simState {
+		for _, slot := range rs {
+			if slot.ChefIdx >= 0 {
+				usedChefIDs[o.rules[ri].Chefs[slot.ChefIdx].ChefID] = true
+			}
+		}
+	}
 
-// Optimize runs the full multi-phase search and returns the best score, state, and elapsed time.
-func (o *Optimizer) Optimize(targetScore int) (int, SimState, time.Duration) {
+	type pos struct{ ri, ci int }
+	var filled []pos
+
+	for ri := range o.rules {
+		rule := &o.rules[ri]
+		nc := o.numChefs(ri)
+		for ci := 0; ci < nc; ci++ {
+			if o.simState[ri][ci].ChefIdx >= 0 {
+				continue
+			}
+			for _, cr := range o.getChefRanking(ri, ci) {
+				ch := &rule.Chefs[cr.chefIdx]
+				if ch.Got && !usedChefIDs[ch.ChefID] {
+					o.simSetChef(ri, ci, cr.chefIdx)
+					usedChefIDs[ch.ChefID] = true
+					o.greedyFillRecipes(ri, ci)
+					filled = append(filled, pos{ri, ci})
+					break
+				}
+			}
+		}
+	}
+
+	if len(filled) == 0 {
+		return
+	}
+
+	for _, p := range filled {
+		ri, ci := p.ri, p.ci
+		rule := &o.rules[ri]
+		curChefIdx := o.simState[ri][ci].ChefIdx
+		bestSlot := o.simState[ri][ci]
+		bestScore := o.fastCalcRuleScore(ri)
+
+		for idx := range rule.Chefs {
+			ch := &rule.Chefs[idx]
+			if !ch.Got || (usedChefIDs[ch.ChefID] && idx != curChefIdx) {
+				continue
+			}
+			o.simSetChef(ri, ci, idx)
+			for reci := 0; reci < 3; reci++ {
+				o.simSetRecipe(ri, ci, reci, -1)
+			}
+			o.greedyFillRecipes(ri, ci)
+			score := o.fastCalcRuleScore(ri)
+			if score > bestScore {
+				bestScore = score
+				bestSlot = o.simState[ri][ci]
+			}
+		}
+
+		if bestSlot.ChefIdx != curChefIdx {
+			usedChefIDs[rule.Chefs[curChefIdx].ChefID] = false
+			usedChefIDs[rule.Chefs[bestSlot.ChefIdx].ChefID] = true
+		}
+		o.simState[ri][ci] = bestSlot
+		o.markDirty(ri)
+	}
+
+	fmt.Fprintf(os.Stderr, "[fill] patched %d empty slot(s)\n", len(filled))
+}
+
+func (o *Optimizer) Optimize() (int, SimState, time.Duration) {
 	start := time.Now()
 
-	fmt.Fprintf(logw(), "[init] rules=%d, target=%d\n", len(o.rules), targetScore)
+	fmt.Fprintf(os.Stderr, "[init] rules=%d\n", len(o.rules))
 
 	// Phase 1: seed generation
 	candidates := o.generateSeeds()
-	fmt.Fprintf(logw(), "[seed] candidates=%d\n", len(candidates))
-	if Verbose {
-		fmt.Fprintf(logw(), "[verbose] generated %d seed candidates\n", len(candidates))
+	fmt.Fprintf(os.Stderr, "[seed] candidates=%d\n", len(candidates))
+	if o.cfg.Verbose {
+		for ci, c := range candidates {
+			var parts []string
+			for ri, rs := range c.state {
+				for _, slot := range rs {
+					if slot.ChefIdx >= 0 {
+						parts = append(parts, fmt.Sprintf("r%d:%s", ri, o.rules[ri].Chefs[slot.ChefIdx].Name))
+					}
+				}
+			}
+			fmt.Fprintf(os.Stderr, "[verbose] cand#%d score=%d chefs=[%s]\n", ci, c.score, strings.Join(parts, " "))
+		}
 	}
 	if len(candidates) == 0 {
 		return 0, nil, time.Since(start)
 	}
 
-	// Phase 2: batch refine ALL candidates (no top-20 limit)
+	// Phase 2: batch refine ALL candidates in parallel
 	activeRules := make([]int, len(o.rules))
 	for i := range activeRules {
 		activeRules[i] = i
 	}
-	for i := range candidates {
-		o.setSimState(candidates[i].state)
-		o.quickRefine(activeRules, false)
-		candidates[i].score = o.fastCalcScore()
-		candidates[i].state = cloneSimState(o.simState)
+	{
+		nRefine := runtime.GOMAXPROCS(0)
+		if nRefine > len(candidates) {
+			nRefine = len(candidates)
+		}
+		refineCh := make(chan int, len(candidates))
+		for i := range candidates {
+			refineCh <- i
+		}
+		close(refineCh)
+		var refineWG sync.WaitGroup
+		for w := 0; w < nRefine; w++ {
+			refineWG.Add(1)
+			go func() {
+				defer refineWG.Done()
+				worker := o.clone()
+				for idx := range refineCh {
+					worker.setSimState(candidates[idx].state)
+					worker.quickRefine(activeRules, false)
+					candidates[idx].score = worker.fastCalcScore()
+					candidates[idx].state = cloneSimState(worker.simState)
+				}
+			}()
+		}
+		refineWG.Wait()
 	}
 
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
-	fmt.Fprintf(logw(), "[refine] best=%d, worst=%d\n",
-		candidates[0].score, candidates[len(candidates)-1].score)
+	partialTopK(candidates, o.cfg.MaxDiverseSeeds, func(a, b seedCandidate) int { return b.score - a.score })
+	fmt.Fprintf(os.Stderr, "[refine] best=%d\n", candidates[0].score)
 
-	if Verbose {
+	if o.cfg.Verbose {
 		limit := len(candidates)
 		if limit > 10 {
 			limit = 10
 		}
 		for i := 0; i < limit; i++ {
-			fmt.Fprintf(logw(), "[verbose] seed#%d score after refine: %d\n", i, candidates[i].score)
+			fmt.Fprintf(os.Stderr, "[verbose] seed#%d score after refine: %d\n", i, candidates[i].score)
 		}
 	}
 
 	// Phase 3: diversity selection + dedup
-	seeds := selectDiverseSeeds(candidates, cfg.MaxDiverseSeeds)
+	seeds := selectDiverseSeeds(candidates, o.cfg.MaxDiverseSeeds)
 	seeds = dedupSeeds(seeds)
-	fmt.Fprintf(logw(), "[diversity] seeds=%d\n", len(seeds))
+
+	// Aura-chef seeds: refine and append after diversity selection
+	auraCands := o.generateAuraSeeds()
+	if len(auraCands) > 0 {
+		nRefine := runtime.GOMAXPROCS(0)
+		if nRefine > len(auraCands) {
+			nRefine = len(auraCands)
+		}
+		refineCh := make(chan int, len(auraCands))
+		for i := range auraCands {
+			refineCh <- i
+		}
+		close(refineCh)
+		var auraWG sync.WaitGroup
+		for w := 0; w < nRefine; w++ {
+			auraWG.Add(1)
+			go func() {
+				defer auraWG.Done()
+				worker := o.clone()
+				for idx := range refineCh {
+					worker.setSimState(auraCands[idx].state)
+					worker.quickRefine(activeRules, false)
+					auraCands[idx].score = worker.fastCalcScore()
+					auraCands[idx].state = cloneSimState(worker.simState)
+				}
+			}()
+		}
+		auraWG.Wait()
+		slices.SortFunc(auraCands, func(a, b seedCandidate) int { return b.score - a.score })
+		limit := 3
+		if limit > len(auraCands) {
+			limit = len(auraCands)
+		}
+		for i := 0; i < limit; i++ {
+			seeds = append(seeds, cloneSimState(auraCands[i].state))
+		}
+		seeds = dedupSeeds(seeds)
+	}
+
+	// Multi-skill combo seeds: refine and append
+	multiCands := o.generateMultiSkillSeeds()
+	if len(multiCands) > 0 {
+		nRefine := runtime.GOMAXPROCS(0)
+		if nRefine > len(multiCands) {
+			nRefine = len(multiCands)
+		}
+		refineCh := make(chan int, len(multiCands))
+		for i := range multiCands {
+			refineCh <- i
+		}
+		close(refineCh)
+		var multiWG sync.WaitGroup
+		for w := 0; w < nRefine; w++ {
+			multiWG.Add(1)
+			go func() {
+				defer multiWG.Done()
+				worker := o.clone()
+				for idx := range refineCh {
+					worker.setSimState(multiCands[idx].state)
+					worker.quickRefine(activeRules, false)
+					multiCands[idx].score = worker.fastCalcScore()
+					multiCands[idx].state = cloneSimState(worker.simState)
+				}
+			}()
+		}
+		multiWG.Wait()
+		slices.SortFunc(multiCands, func(a, b seedCandidate) int { return b.score - a.score })
+		added := 3
+		if added > len(multiCands) {
+			added = len(multiCands)
+		}
+		for i := 0; i < added; i++ {
+			seeds = append(seeds, cloneSimState(multiCands[i].state))
+		}
+		seeds = dedupSeeds(seeds)
+		fmt.Fprintf(os.Stderr, "[multi-skill] added %d seeds\n", added)
+	}
+
+	fmt.Fprintf(os.Stderr, "[diversity] seeds=%d\n", len(seeds))
+
+	if o.cfg.Verbose {
+		for si, s := range seeds {
+			for ri, rs := range s {
+				var names []string
+				for _, slot := range rs {
+					if slot.ChefIdx >= 0 {
+						names = append(names, o.rules[ri].Chefs[slot.ChefIdx].Name)
+					}
+				}
+				fmt.Fprintf(os.Stderr, "[verbose] seed#%d rule%d chefs: %v\n", si, ri, names)
+			}
+		}
+	}
 
 	// Phase 4: deep search ALL seeds in parallel goroutines
 	numWorkers := runtime.GOMAXPROCS(0)
@@ -1215,7 +1747,7 @@ func (o *Optimizer) Optimize(targetScore int) (int, SimState, time.Duration) {
 	var globalBestState SimState
 	winnerIdx := -1
 	for r := range resultCh {
-		fmt.Fprintf(logw(), "[deep] seed#%d done, score=%d\n", r.idx, r.score)
+		fmt.Fprintf(os.Stderr, "[deep] seed#%d done, score=%d\n", r.idx, r.score)
 		if r.score > globalBest {
 			globalBest = r.score
 			globalBestState = r.state
@@ -1223,19 +1755,54 @@ func (o *Optimizer) Optimize(targetScore int) (int, SimState, time.Duration) {
 		}
 	}
 
-	elapsed := time.Since(start)
-	if Verbose {
-		fmt.Fprintf(logw(), "[verbose] winning seed: #%d with score %d\n", winnerIdx, globalBest)
+	if globalBestState != nil {
+		o.setSimState(globalBestState)
+		o.fillEmptySlots()
+		globalBestState = cloneSimState(o.simState)
+		globalBest = o.fastCalcScore()
 	}
-	fmt.Fprintf(logw(), "[done] best=%d, elapsed=%v\n", globalBest, elapsed)
+
+	elapsed := time.Since(start)
+	if o.cfg.Verbose {
+		fmt.Fprintf(os.Stderr, "[verbose] winning seed: #%d with score %d\n", winnerIdx, globalBest)
+	}
+	fmt.Fprintf(os.Stderr, "[done] best=%d, elapsed=%v\n", globalBest, elapsed)
 	return globalBest, globalBestState, elapsed
 }
 
-func logw() *os.File { return os.Stderr }
-
-func intMax(a, b int) int {
-	if a > b {
-		return a
+func partialTopK[T any](s []T, k int, cmpFn func(a, b T) int) {
+	if k <= 0 || k >= len(s) {
+		slices.SortFunc(s, cmpFn)
+		return
 	}
-	return b
+	quickselect(s, 0, len(s)-1, k, cmpFn)
+	slices.SortFunc(s[:k], cmpFn)
+}
+
+func quickselect[T any](s []T, lo, hi, k int, cmpFn func(a, b T) int) {
+	for lo < hi {
+		pivot := s[lo+(hi-lo)/2]
+		i, j := lo, hi
+		for i <= j {
+			for cmpFn(s[i], pivot) < 0 {
+				i++
+			}
+			for cmpFn(pivot, s[j]) < 0 {
+				j--
+			}
+			if i <= j {
+				s[i], s[j] = s[j], s[i]
+				i++
+				j--
+			}
+		}
+		if k <= j-lo+1 {
+			hi = j
+		} else if k > i-lo {
+			k -= i - lo
+			lo = i
+		} else {
+			return
+		}
+	}
 }
