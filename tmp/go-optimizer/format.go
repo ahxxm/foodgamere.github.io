@@ -31,7 +31,7 @@ type RuleDetail struct {
 	Chefs      []ChefDetail
 }
 
-// CalcRuleDetail computes the same score as CalcRuleScore but also returns
+// CalcRuleDetail computes the same score as calcRuleScore but also returns
 // per-chef/recipe breakdown for formatted output.
 func CalcRuleDetail(rules []Rule, simState SimState, ruleIndex int, gameData *GameData) RuleDetail {
 	rule := &rules[ruleIndex]
@@ -43,15 +43,17 @@ func CalcRuleDetail(rules []Rule, simState SimState, ruleIndex int, gameData *Ga
 	}
 
 	slots := resolveRuleState(rule, rs)
-	applyChefDataForRule(rule, slots)
+	customArr := buildCustomArr(slots)
+	applyChefDataForRule(rule, slots, getPartialChefAdds(customArr, rule))
 
-	// Recompute recipe quantities with material tracking (must match CalcRuleScore).
-	matPool := CloneMaterials(rule.Materials)
+	// Recompute recipe quantities with material tracking (must match calcRuleScore).
+	matPool := cloneMaterials(rule.Materials)
+	matIdx := buildMatIndex(matPool, nil)
 	for ci := range slots {
 		for reci := 0; reci < 3; reci++ {
 			rec := &slots[ci].recipes[reci]
 			if rec.Data != nil {
-				recipeMax := GetRecipeQuantity(rec.Data, matPool, rule, slots[ci].chefObj)
+				recipeMax := getRecipeQuantity(rec.Data, matPool, rule, slots[ci].chefObj, matIdx)
 				if rule.DisableMultiCookbook && recipeMax > 1 {
 					recipeMax = 1
 				}
@@ -59,17 +61,17 @@ func CalcRuleDetail(rules []Rule, simState SimState, ruleIndex int, gameData *Ga
 				if rec.Quantity > recipeMax {
 					rec.Quantity = recipeMax
 				}
-				UpdateMaterialsData(matPool, rec.Data, rec.Quantity, slots[ci].chefObj)
+				updateMaterialsData(matPool, rec.Data, rec.Quantity, slots[ci].chefObj, matIdx)
 			}
 		}
 	}
 
-	customArr := buildCustomArr(slots)
+	customArr = buildCustomArr(slots)
 	partialRecipeAdds := getPartialRecipeAdds(customArr, rule)
 	intentAdds := getIntentAdds(ruleIndex, customArr, gameData, rules)
 
 	detail.Chefs = make([]ChefDetail, len(slots))
-	u := 0
+	rawScore := 0
 	satTotal := 0
 
 	for ci := range slots {
@@ -94,7 +96,7 @@ func CalcRuleDetail(rules []Rule, simState SimState, ruleIndex int, gameData *Ga
 			if idx < len(partialRecipeAdds) {
 				pa = partialRecipeAdds[idx]
 			}
-			var ia []Intent
+			var ia []*Intent
 			if idx < len(intentAdds) {
 				ia = intentAdds[idx]
 			}
@@ -104,7 +106,6 @@ func CalcRuleDetail(rules []Rule, simState SimState, ruleIndex int, gameData *Ga
 				slots[ci].equipObj,
 				rec.Data,
 				rec.Quantity,
-				rec.Max,
 				rule,
 				&slots[ci].recipes,
 				pa,
@@ -118,53 +119,22 @@ func CalcRuleDetail(rules []Rule, simState SimState, ruleIndex int, gameData *Ga
 			rd.Satiety = sat
 			cd.TotalScore += adjusted
 			cd.TotalQty += rec.Quantity
-			u += adjusted
+			rawScore += adjusted
 			satTotal += sat
 		}
 	}
 
-	// Score modifiers
-	h := 1.0
-	if rule.ScoreMultiply != 0 {
-		h = rule.ScoreMultiply
-	}
-	m := 1.0
-	if rule.ScorePow != 0 {
-		m = rule.ScorePow
-	}
-	v := 0
-	if rule.ScoreAdd != 0 {
-		v = rule.ScoreAdd
-	}
-
-	uf := toFixed2(math.Pow(float64(u), m) * h)
-	if rule.IsActivity {
-		u = int(math.Ceil(uf))
-	} else {
-		u = int(math.Floor(uf))
-	}
-	if u != 0 {
-		u += v
-	}
-
-	// Satiety bonus
-	if rule.Satiety != 0 {
-		satCount := 0
-		expected := 3 * len(rule.IntentList)
-		for ci := range slots {
-			for reci := 0; reci < 3; reci++ {
-				if slots[ci].recipes[reci].Data != nil {
-					satCount++
-				}
+	// Count filled recipe slots for satiety check
+	recipeCount := 0
+	for ci := range slots {
+		for reci := 0; reci < 3; reci++ {
+			if slots[ci].recipes[reci].Data != nil {
+				recipeCount++
 			}
 		}
-		if satCount == expected {
-			satAdd := getSatietyPercent(satTotal, rule)
-			u = calSatietyAdd(u, satAdd)
-		}
 	}
 
-	detail.GuestScore = u
+	detail.GuestScore = applyRuleModifiers(rawScore, satTotal, recipeCount, rule)
 	detail.Satiety = satTotal
 	return detail
 }
