@@ -1,233 +1,617 @@
 package main
 
-// ── Core data types matching the JS scoring pipeline ──
+type EffType int
 
-// Addition holds absolute and percentage modifiers applied to a base value.
+const (
+	EffNone EffType = iota
+	// Cooking skill types
+	EffStirfry
+	EffBoil
+	EffKnife
+	EffFry
+	EffBake
+	EffSteam
+	// Price addition types (Use*)
+	EffUseAll
+	EffUseFish
+	EffUseCreation
+	EffUseMeat
+	EffUseVegetable
+	EffUseStirfry
+	EffUseBoil
+	EffUseFry
+	EffUseKnife
+	EffUseBake
+	EffUseSteam
+	EffUseSweet
+	EffUseSour
+	EffUseSpicy
+	EffUseSalty
+	EffUseBitter
+	EffUseTasty
+	EffGoldGain
+	EffCookbookPrice
+	// Basic price addition types (contiguous for isBasicPriceUseType range check)
+	EffBasicPrice
+	EffBasicPriceUseFish
+	EffBasicPriceUseCreation
+	EffBasicPriceUseMeat
+	EffBasicPriceUseVegetable
+	EffBasicPriceUseStirfry
+	EffBasicPriceUseBoil
+	EffBasicPriceUseFry
+	EffBasicPriceUseKnife
+	EffBasicPriceUseBake
+	EffBasicPriceUseSteam
+	EffBasicPriceUseSweet
+	EffBasicPriceUseSour
+	EffBasicPriceUseSpicy
+	EffBasicPriceUseSalty
+	EffBasicPriceUseBitter
+	EffBasicPriceUseTasty
+	// Chef data types
+	EffMaxEquipLimit
+	EffMaterialReduce
+	EffMutiEquipmentSkill
+)
+
+func isBasicPriceUseType(t EffType) bool {
+	return t >= EffBasicPriceUseFish && t <= EffBasicPriceUseTasty
+}
+
+type CalType int
+
+const (
+	CalNone CalType = iota
+	CalAbs
+	CalPercent
+)
+
+type CondScope int
+
+const (
+	CondScopeNone CondScope = iota
+	CondScopeSelf
+	CondScopePartial
+	CondScopeNext
+	CondScopeGlobal
+)
+
+type CondType int
+
+const (
+	CondTypeNone CondType = iota
+	CondTypeRank
+	CondTypePerRank
+	CondTypeExcessCookbookNum
+	CondTypeFewerCookbookNum
+	CondTypeCookbookRarity
+	CondTypeChefTag
+	CondTypeCookbookTag
+	CondTypeSameSkill
+	CondTypePerSkill
+	CondTypeMaterialReduce
+	CondTypeSwordsUnited
+)
+
+type IntentCondType int
+
+const (
+	IntCondNone IntentCondType = iota
+	IntCondGroup
+	IntCondChefStar
+	IntCondRank
+	IntCondCondimentSkill
+	IntCondCookSkill
+	IntCondRarity
+	IntCondOrder
+)
+
+type IntentEffType int
+
+const (
+	IntEffNone IntentEffType = iota
+	IntEffCreateBuff
+	IntEffCreateIntent
+	IntEffIntentAdd
+	IntEffBasicPriceChange
+	IntEffBasicPriceChangePercent
+	IntEffSatietyChange
+	IntEffSatietyChangePercent
+	IntEffSetSatietyValue
+	IntEffPriceChangePercent
+)
+
+type CookSkill int
+
+const (
+	CookNone CookSkill = iota
+	CookStirfry
+	CookBoil
+	CookKnife
+	CookFry
+	CookBake
+	CookSteam
+)
+
+type CondimentType int
+
+const (
+	CondimentNone CondimentType = iota
+	CondimentSweet
+	CondimentSour
+	CondimentSpicy
+	CondimentSalty
+	CondimentBitter
+	CondimentTasty
+)
+
+type OriginType int
+
+const (
+	OriginNone OriginType = iota
+	OriginPond     // 池塘
+	OriginWorkshop // 作坊
+	OriginPasture  // 牧场
+	OriginCoop     // 鸡舍
+	OriginPigsty   // 猪圈
+	OriginShed     // 菜棚
+	OriginField    // 菜地
+	OriginForest   // 森林
+)
+
+func parseEffType(s string) EffType {
+	switch s {
+	case "Stirfry":
+		return EffStirfry
+	case "Boil":
+		return EffBoil
+	case "Knife":
+		return EffKnife
+	case "Fry":
+		return EffFry
+	case "Bake":
+		return EffBake
+	case "Steam":
+		return EffSteam
+	case "UseAll":
+		return EffUseAll
+	case "UseFish":
+		return EffUseFish
+	case "UseCreation":
+		return EffUseCreation
+	case "UseMeat":
+		return EffUseMeat
+	case "UseVegetable":
+		return EffUseVegetable
+	case "UseStirfry":
+		return EffUseStirfry
+	case "UseBoil":
+		return EffUseBoil
+	case "UseFry":
+		return EffUseFry
+	case "UseKnife":
+		return EffUseKnife
+	case "UseBake":
+		return EffUseBake
+	case "UseSteam":
+		return EffUseSteam
+	case "UseSweet":
+		return EffUseSweet
+	case "UseSour":
+		return EffUseSour
+	case "UseSpicy":
+		return EffUseSpicy
+	case "UseSalty":
+		return EffUseSalty
+	case "UseBitter":
+		return EffUseBitter
+	case "UseTasty":
+		return EffUseTasty
+	case "Gold_Gain":
+		return EffGoldGain
+	case "CookbookPrice":
+		return EffCookbookPrice
+	case "BasicPrice":
+		return EffBasicPrice
+	case "BasicPriceUseFish":
+		return EffBasicPriceUseFish
+	case "BasicPriceUseCreation":
+		return EffBasicPriceUseCreation
+	case "BasicPriceUseMeat":
+		return EffBasicPriceUseMeat
+	case "BasicPriceUseVegetable":
+		return EffBasicPriceUseVegetable
+	case "BasicPriceUseStirfry":
+		return EffBasicPriceUseStirfry
+	case "BasicPriceUseBoil":
+		return EffBasicPriceUseBoil
+	case "BasicPriceUseFry":
+		return EffBasicPriceUseFry
+	case "BasicPriceUseKnife":
+		return EffBasicPriceUseKnife
+	case "BasicPriceUseBake":
+		return EffBasicPriceUseBake
+	case "BasicPriceUseSteam":
+		return EffBasicPriceUseSteam
+	case "BasicPriceUseSweet":
+		return EffBasicPriceUseSweet
+	case "BasicPriceUseSour":
+		return EffBasicPriceUseSour
+	case "BasicPriceUseSpicy":
+		return EffBasicPriceUseSpicy
+	case "BasicPriceUseSalty":
+		return EffBasicPriceUseSalty
+	case "BasicPriceUseBitter":
+		return EffBasicPriceUseBitter
+	case "BasicPriceUseTasty":
+		return EffBasicPriceUseTasty
+	case "MaxEquipLimit":
+		return EffMaxEquipLimit
+	case "MaterialReduce":
+		return EffMaterialReduce
+	case "MutiEquipmentSkill":
+		return EffMutiEquipmentSkill
+	}
+	return EffNone
+}
+
+func parseCalType(s string) CalType {
+	switch s {
+	case "Abs":
+		return CalAbs
+	case "Percent":
+		return CalPercent
+	}
+	return CalNone
+}
+
+func parseCondScope(s string) CondScope {
+	switch s {
+	case "Self":
+		return CondScopeSelf
+	case "Partial":
+		return CondScopePartial
+	case "Next":
+		return CondScopeNext
+	case "Global":
+		return CondScopeGlobal
+	}
+	return CondScopeNone
+}
+
+func parseCondType(s string) CondType {
+	switch s {
+	case "Rank":
+		return CondTypeRank
+	case "PerRank":
+		return CondTypePerRank
+	case "ExcessCookbookNum":
+		return CondTypeExcessCookbookNum
+	case "FewerCookbookNum":
+		return CondTypeFewerCookbookNum
+	case "CookbookRarity":
+		return CondTypeCookbookRarity
+	case "ChefTag":
+		return CondTypeChefTag
+	case "CookbookTag":
+		return CondTypeCookbookTag
+	case "SameSkill":
+		return CondTypeSameSkill
+	case "PerSkill":
+		return CondTypePerSkill
+	case "MaterialReduce":
+		return CondTypeMaterialReduce
+	case "SwordsUnited":
+		return CondTypeSwordsUnited
+	}
+	return CondTypeNone
+}
+
+func parseIntentCondType(s string) IntentCondType {
+	switch s {
+	case "Group":
+		return IntCondGroup
+	case "ChefStar":
+		return IntCondChefStar
+	case "Rank":
+		return IntCondRank
+	case "CondimentSkill":
+		return IntCondCondimentSkill
+	case "CookSkill":
+		return IntCondCookSkill
+	case "Rarity":
+		return IntCondRarity
+	case "Order":
+		return IntCondOrder
+	}
+	return IntCondNone
+}
+
+func parseIntentEffType(s string) IntentEffType {
+	switch s {
+	case "CreateBuff":
+		return IntEffCreateBuff
+	case "CreateIntent":
+		return IntEffCreateIntent
+	case "IntentAdd":
+		return IntEffIntentAdd
+	case "BasicPriceChange":
+		return IntEffBasicPriceChange
+	case "BasicPriceChangePercent":
+		return IntEffBasicPriceChangePercent
+	case "SatietyChange":
+		return IntEffSatietyChange
+	case "SatietyChangePercent":
+		return IntEffSatietyChangePercent
+	case "SetSatietyValue":
+		return IntEffSetSatietyValue
+	case "PriceChangePercent":
+		return IntEffPriceChangePercent
+	}
+	return IntEffNone
+}
+
+func parseCookSkill(s string) CookSkill {
+	switch s {
+	case "stirfry", "Stirfry":
+		return CookStirfry
+	case "boil", "Boil":
+		return CookBoil
+	case "knife", "Knife":
+		return CookKnife
+	case "fry", "Fry":
+		return CookFry
+	case "bake", "Bake":
+		return CookBake
+	case "steam", "Steam":
+		return CookSteam
+	}
+	return CookNone
+}
+
+func parseCondimentType(s string) CondimentType {
+	switch s {
+	case "Sweet":
+		return CondimentSweet
+	case "Sour":
+		return CondimentSour
+	case "Spicy":
+		return CondimentSpicy
+	case "Salty":
+		return CondimentSalty
+	case "Bitter":
+		return CondimentBitter
+	case "Tasty":
+		return CondimentTasty
+	}
+	return CondimentNone
+}
+
+func parseOriginType(s string) OriginType {
+	switch s {
+	case "池塘":
+		return OriginPond
+	case "作坊":
+		return OriginWorkshop
+	case "牧场":
+		return OriginPasture
+	case "鸡舍":
+		return OriginCoop
+	case "猪圈":
+		return OriginPigsty
+	case "菜棚":
+		return OriginShed
+	case "菜地":
+		return OriginField
+	case "森林":
+		return OriginForest
+	}
+	return OriginNone
+}
+
 type Addition struct {
 	Abs     float64
 	Percent float64
 }
 
-// SkillEffect represents a single skill/buff effect entry.
 type SkillEffect struct {
-	Type               string        `json:"type"`
-	Cal                string        `json:"cal"`    // "Abs" or "Percent"
-	Value              float64       `json:"value"`
-	Rarity             int           `json:"rarity"`
-	Condition          string        `json:"condition"` // "Self", "Partial", "Next"
-	ConditionType      string        `json:"conditionType"`
-	ConditionValue     interface{}   `json:"conditionValue"`
-	ConditionValueList []interface{} `json:"conditionValueList"`
-	Tag                int           `json:"tag"` // chef tag filter
+	Type               EffType
+	Cal                CalType
+	Value              float64
+	Rarity             int
+	Condition          CondScope
+	ConditionType      CondType
+	ConditionValueList []int
+	Tag                int
+	ConditionValueInt  int
 }
 
-// LimitEffect represents a rarity-gated limit bonus (e.g. extra cookbook copies).
 type LimitEffect struct {
-	Rarity int `json:"rarity"`
-	Value  int `json:"value"`
+	Rarity int
+	Value  int
 }
 
-// MaterialReduce describes a chef's ability to reduce material consumption.
 type MaterialReduce struct {
-	ConditionType      string  `json:"conditionType"`
-	ConditionValueList []int   `json:"conditionValueList"`
-	Cal                string  `json:"cal"`
-	Value              float64 `json:"value"`
+	ConditionValueList []int
+	Cal                CalType
+	Value              float64
 }
 
-// Amber is a gem socket on a chef's disk that provides skill effects.
 type Amber struct {
-	Data *AmberData `json:"data"`
+	Data *AmberData
 }
 
-// AmberData holds the per-level skill effects for an amber.
 type AmberData struct {
-	AllEffect [][]SkillEffect `json:"allEffect"` // allEffect[level-1]
+	AllEffect [][]SkillEffect // allEffect[level-1]
 }
 
-// Disk is a chef's equipment disk containing amber sockets.
 type Disk struct {
-	Level    int     `json:"level"`
-	MaxLevel int     `json:"maxLevel"`
-	Ambers   []Amber `json:"ambers"`
+	Level    int
+	MaxLevel int
+	Ambers   []Amber
 }
 
-// Chef represents a chef with base stats, skills, equipment, and computed skill values.
 type Chef struct {
-	ChefID              int              `json:"chefId"`
-	Name                string           `json:"name"`
-	Rarity              int              `json:"rarity"`
-	Addition            float64          `json:"addition"`
-	Tags                []int            `json:"tags"`
-	SpecialSkillEffect  []SkillEffect    `json:"specialSkillEffect"`
-	SelfUltimateEffect  []SkillEffect    `json:"selfUltimateEffect"`  // computed by ApplyChefData
-	UltimateSkillEffect []SkillEffect    `json:"ultimateSkillEffect"`
-	MaxLimitEffect      []LimitEffect    `json:"maxLimitEffect"`      // computed by ApplyChefData
-	MaterialEffects     []MaterialReduce `json:"materialEffects"`     // computed by ApplyChefData
-	Disk                Disk             `json:"disk"`
-	EquipID     int    `json:"equipId"`
-	EquipEffect *Equip `json:"equipEffect"` // embedded equip from preprocessor
+	ChefID              int
+	Name                string
+	Rarity              int
+	Addition            float64
+	Tags                []int
+	TagSet              []bool // indexed by tag ID for O(1) lookup
+	SpecialSkillEffect  []SkillEffect
+	SelfUltimateEffect  []SkillEffect    // computed by applyChefData
+	UltimateSkillEffect []SkillEffect
+	MaxLimitEffect      []LimitEffect    // computed by applyChefData
+	MaterialEffects     []MaterialReduce // computed by applyChefData
+	Disk                Disk
+	EquipID             int
+	EquipEffect         *Equip // embedded equip from preprocessor
 
 	// Base skill values
-	Stirfry int `json:"stirfry"`
-	Boil    int `json:"boil"`
-	Knife   int `json:"knife"`
-	Fry     int `json:"fry"`
-	Bake    int `json:"bake"`
-	Steam   int `json:"steam"`
+	Stirfry int
+	Boil    int
+	Knife   int
+	Fry     int
+	Bake    int
+	Steam   int
 
-	// Computed skill values (set by ApplyChefData)
-	StirfryVal float64 `json:"stirfryVal"`
-	BoilVal    float64 `json:"boilVal"`
-	KnifeVal   float64 `json:"knifeVal"`
-	FryVal     float64 `json:"fryVal"`
-	BakeVal    float64 `json:"bakeVal"`
-	SteamVal   float64 `json:"steamVal"`
+	// Computed skill values (set by applyChefData)
+	StirfryVal float64
+	BoilVal    float64
+	KnifeVal   float64
+	FryVal     float64
+	BakeVal    float64
+	SteamVal   float64
 
-	Got bool `json:"got"`
+	Got bool
 }
 
-// RecipeMaterial is a single ingredient entry in a recipe.
 type RecipeMaterial struct {
-	Material int    `json:"material"`
-	Quantity int    `json:"quantity"`
-	Origin   string `json:"origin"`
+	Material int
+	Quantity int
+	Origin   OriginType
 }
 
-// Recipe holds a dish's base stats, price, skill requirements, and computed bonuses.
 type Recipe struct {
-	RecipeID         int              `json:"recipeId"`
-	Name             string           `json:"name"`
-	Rarity           int              `json:"rarity"`
-	Price            float64          `json:"price"`
-	Stirfry          int              `json:"stirfry"`
-	Boil             int              `json:"boil"`
-	Knife            int              `json:"knife"`
-	Fry              int              `json:"fry"`
-	Bake             int              `json:"bake"`
-	Steam            int              `json:"steam"`
-	Materials        []RecipeMaterial `json:"materials"`
-	Addition         float64          `json:"addition"`
-	ActivityAddition float64          `json:"activityAddition"`
-	UltimateAddition float64          `json:"ultimateAddition"`
-	LimitVal         int              `json:"limitVal"`
-	Condiment        string           `json:"condiment"`
-	Tags             []int            `json:"tags"`
-	Got              bool             `json:"got"`
+	RecipeID         int
+	Name             string
+	Rarity           int
+	Price            float64
+	Stirfry          int
+	Boil             int
+	Knife            int
+	Fry              int
+	Bake             int
+	Steam            int
+	Materials        []RecipeMaterial
+	Addition         float64
+	ActivityAddition float64
+	UltimateAddition float64
+	LimitVal         int
+	Condiment        CondimentType
+	Tags             []int
+	TagSet           []bool // indexed by tag ID for O(1) lookup
+	Got              bool
+	PriceMask        uint64 // bit N set = EffType(N) matches this recipe for price addition
+	BasicMask        uint64 // bit N set = EffType(N) matches this recipe for basic addition
 }
 
-// Material represents an ingredient with its available quantity and score addition.
 type Material struct {
-	MaterialID int     `json:"materialId"`
-	Quantity   int     `json:"quantity"`
-	Addition   float64 `json:"addition"`
-	Name       string  `json:"name"`
-	Origin     string  `json:"origin"`
+	MaterialID int
+	Quantity   int
+	Addition   float64
+	Name       string
+	Origin     OriginType
 }
 
-// Equip represents a piece of equipment with skill effects.
 type Equip struct {
-	EquipID int           `json:"equipId"`
-	Effect  []SkillEffect `json:"effect"`
+	EquipID int
+	Effect  []SkillEffect
 }
 
-// SelfUltimateEntry pairs a chef ID with their self-targeted ultimate skill effects.
 type SelfUltimateEntry struct {
-	ChefID int           `json:"chefId"`
-	Effect []SkillEffect `json:"effect"`
+	ChefID int
+	Effect []SkillEffect
 }
 
-// QixiaEntry holds the SwordsUnited (qixia) skill bonuses keyed by chef tag.
 type QixiaEntry struct {
-	Stirfry float64 `json:"Stirfry"`
-	Boil    float64 `json:"Boil"`
-	Knife   float64 `json:"Knife"`
-	Fry     float64 `json:"Fry"`
-	Bake    float64 `json:"Bake"`
-	Steam   float64 `json:"Steam"`
+	Stirfry float64
+	Boil    float64
+	Knife   float64
+	Fry     float64
+	Bake    float64
+	Steam   float64
 }
 
-// Rule represents a single guest/contest rule.
 type Rule struct {
-	Title                   string             `json:"Title"`
-	Satiety                 int                `json:"Satiety"`
-	IntentList              [][]int            `json:"IntentList"`
-	ScoreMultiply           float64            `json:"scoreMultiply"`
-	ScorePow                float64            `json:"scorePow"`
-	ScoreAdd                int                `json:"scoreAdd"`
-	IsActivity              bool               `json:"IsActivity"`
-	DisableMultiCookbook    bool               `json:"DisableMultiCookbook"`
-	DisableCookbookRank     bool               `json:"DisableCookbookRank"`
-	DisableChefSkillEffect  bool               `json:"DisableChefSkillEffect"`
-	DisableEquipSkillEffect bool               `json:"DisableEquipSkillEffect"`
-	DisableCondimentEffect  bool               `json:"DisableCondimentEffect"`
-	DisableDecorationEffect bool               `json:"DisableDecorationEffect"`
-	MaterialsEffect         bool               `json:"MaterialsEffect"`
-	RecipeEffect            map[int]float64    `json:"RecipeEffect"`
-	ChefTagEffect           map[int]float64    `json:"ChefTagEffect"`
-	Materials               []Material         `json:"materials"`
-	DecorationEffect        float64            `json:"decorationEffect"`
-	SatisfyRewardType       int                `json:"SatisfyRewardType"`
-	SatisfyExtraValue       float64            `json:"SatisfyExtraValue"`
-	SatisfyDeductValue      float64            `json:"SatisfyDeductValue"`
-	CalPartialChefIDs       []int              `json:"calPartialChefIds"`
+	Title                   string
+	Satiety                 int
+	IntentList              [][]int
+	ScoreMultiply           float64
+	ScorePow                float64
+	ScoreAdd                int
+	IsActivity              bool
+	DisableMultiCookbook    bool
+	DisableCookbookRank     bool
+	DisableChefSkillEffect  bool
+	DisableEquipSkillEffect bool
+	DisableDecorationEffect bool
+	MaterialsEffect         bool
+	RecipeEffect            map[int]float64
+	ChefTagEffect           map[int]float64
+	Materials               []Material
+	DecorationEffect        float64
+	SatisfyRewardType       int
+	SatisfyExtraValue       float64
+	SatisfyDeductValue      float64
+	CalPartialChefSet       []bool // indexed by ChefID for O(1) lookup
 
-	CalGlobalUltimateData   []SkillEffect       `json:"calGlobalUltimateData"`
-	CalSelfUltimateData     []SelfUltimateEntry  `json:"calSelfUltimateData"`
-	CalActivityUltimateData []SkillEffect        `json:"calActivityUltimateData"`
-	CalQixiaData            map[int]*QixiaEntry  `json:"calQixiaData"`
+	CalGlobalUltimateData []SkillEffect
+	CalSelfUltimateData   []SelfUltimateEntry
+	CalQixiaData          map[int]*QixiaEntry
 
-	Chefs   []Chef  `json:"chefs"`
-	Equips  []Equip `json:"equips"`
-	Recipes []Recipe `json:"recipes"`
+	Chefs   []Chef
+	Recipes []Recipe
 
-	GlobalBuffList []int `json:"GlobalBuffList"`
+	GlobalBuffList []int
 }
 
-// ── Intent / Buff ──
-
-// Intent represents a guest intent or buff that modifies recipe scoring.
 type Intent struct {
-	IntentID       int         `json:"intentId"`
-	EffectType     string      `json:"effectType"`
-	EffectValue    float64     `json:"effectValue"`
-	ConditionType  string      `json:"conditionType"`
-	ConditionValue interface{} `json:"conditionValue"`
-	BuffID         int         `json:"buffId"`
-	LastRounds     int         `json:"lastRounds"`
+	IntentID         int
+	EffectType       IntentEffType
+	EffectValue      float64
+	ConditionType    IntentCondType
+	BuffID           int
+	LastRounds       int
+	ConditionValueInt int
+	CondValSkill     CookSkill     // for CookSkill/Group conditions
+	CondValCondiment CondimentType // for CondimentSkill conditions
 }
 
-// GameData holds the global intent and buff definitions used during scoring.
 type GameData struct {
-	Intents []Intent `json:"intents"`
-	Buffs   []Intent `json:"buffs"`
+	Intents    []Intent
+	Buffs      []Intent
+	IntentByID []*Intent // indexed by IntentID for O(1) lookup
+	BuffByID   []*Intent // indexed by BuffID for O(1) lookup
 }
 
-// ── Simulation state (index-based, used by search layer) ──
-
-// SlotState tracks the chef and recipe assignments for one position in a guest rule.
 type SlotState struct {
-	ChefIdx    int      // index into Rule.Chefs (-1 = empty)
-	RecipeIdxs [3]int   // indices into Rule.Recipes (-1 = empty)
+	ChefIdx    int    // index into Rule.Chefs (-1 = empty)
+	RecipeIdxs [3]int // indices into Rule.Recipes (-1 = empty)
 	Quantities [3]int
 	MaxQty     [3]int
 }
 
-// RuleState is the set of slot assignments for one guest rule.
 type RuleState []SlotState
 
-// SimState is the complete assignment state across all guest rules in a contest.
 type SimState []RuleState
 
-// ── Scoring intermediates (internal to score.go) ──
-
-// PartialAdd pairs a skill effect with the number of times it applies.
 type PartialAdd struct {
 	Effect *SkillEffect
 	Count  int
 }
 
-// recipeSlot is the object-based recipe slot used internally during scoring.
 type recipeSlot struct {
 	Data     *Recipe
 	Quantity int
@@ -235,7 +619,6 @@ type recipeSlot struct {
 	Satiety  int
 }
 
-// customEntry is the object-based per-chef-position entry used internally during scoring.
 type customEntry struct {
 	Chef    *Chef
 	Equip   *Equip
