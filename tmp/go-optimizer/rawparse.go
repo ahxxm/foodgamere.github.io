@@ -1,15 +1,14 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/tidwall/gjson"
 )
-
-// ── Lookup tables built once from data.min.json ──
 
 type skillEntry struct {
 	effects []SkillEffect
@@ -30,9 +29,6 @@ type equipInfo struct {
 	equipID int
 	effects []SkillEffect
 }
-
-// ── Intermediate recipe/chef/material used during rule processing ──
-// These replace the old processed* types with minimal fields actually needed.
 
 type iRecipe struct {
 	Recipe
@@ -61,7 +57,7 @@ type iChef struct {
 type iMaterial struct {
 	MaterialID int
 	Name       string
-	Origin     string
+	Origin     OriginType
 }
 
 type ultimateResult struct {
@@ -72,9 +68,10 @@ type ultimateResult struct {
 }
 
 type gameCache struct {
-	recipes  []iRecipe
-	chefs    []iChef
-	equips   []equipInfo
+	recipes   []iRecipe
+	chefs     []iChef
+	equips    []equipInfo
+	equipByID []*equipInfo // indexed by equipID
 	materials []iMaterial
 
 	skillMap map[int]*skillEntry
@@ -84,8 +81,6 @@ type gameCache struct {
 	decorationEffect float64
 	ultimateData     *ultimateResult
 }
-
-// ── Skill resolution ──
 
 func buildSkillTable(dataJSON string) map[int]*skillEntry {
 	m := make(map[int]*skillEntry)
@@ -104,52 +99,23 @@ func buildSkillTable(dataJSON string) map[int]*skillEntry {
 
 func parseSkillEffect(e gjson.Result) SkillEffect {
 	se := SkillEffect{
-		Type:          e.Get("type").String(),
-		Cal:           e.Get("cal").String(),
+		Type:          parseEffType(e.Get("type").String()),
+		Cal:           parseCalType(e.Get("cal").String()),
 		Value:         e.Get("value").Float(),
 		Rarity:        int(e.Get("rarity").Int()),
-		Condition:     e.Get("condition").String(),
-		ConditionType: e.Get("conditionType").String(),
+		Condition:     parseCondScope(e.Get("condition").String()),
+		ConditionType: parseCondType(e.Get("conditionType").String()),
 		Tag:           int(e.Get("tag").Int()),
 	}
 	cv := e.Get("conditionValue")
 	if cv.Exists() {
-		se.ConditionValue = toInterface(cv)
+		se.ConditionValueInt = int(cv.Int())
 	}
 	e.Get("conditionValueList").ForEach(func(_, item gjson.Result) bool {
-		se.ConditionValueList = append(se.ConditionValueList, toInterface(item))
+		se.ConditionValueList = append(se.ConditionValueList, int(item.Int()))
 		return true
 	})
 	return se
-}
-
-func toInterface(v gjson.Result) interface{} {
-	switch v.Type {
-	case gjson.Number:
-		return v.Float()
-	case gjson.String:
-		return v.String()
-	case gjson.True:
-		return true
-	case gjson.False:
-		return false
-	case gjson.JSON:
-		if v.IsArray() {
-			var arr []interface{}
-			v.ForEach(func(_, item gjson.Result) bool {
-				arr = append(arr, toInterface(item))
-				return true
-			})
-			return arr
-		}
-		m := make(map[string]interface{})
-		v.ForEach(func(key, val gjson.Result) bool {
-			m[key.String()] = toInterface(val)
-			return true
-		})
-		return m
-	}
-	return nil
 }
 
 func resolveEffects(sm map[int]*skillEntry, ids []int) []SkillEffect {
@@ -162,34 +128,38 @@ func resolveEffects(sm map[int]*skillEntry, ids []int) []SkillEffect {
 	return out
 }
 
-// ── LoadRawData ──
+func loadFromStrings(dataJSON, archJSON string) *InputData {
+	gc := buildGameCache(dataJSON)
+	maxEquipID := 0
+	for i := range gc.equips {
+		if gc.equips[i].equipID > maxEquipID {
+			maxEquipID = gc.equips[i].equipID
+		}
+	}
+	gc.equipByID = make([]*equipInfo, maxEquipID+1)
+	for i := range gc.equips {
+		gc.equipByID[gc.equips[i].equipID] = &gc.equips[i]
+	}
+	applyArchive(gc, archJSON)
+	gc.ultimateData = computeUltimateData(gc, archJSON)
+	return buildOutput(gc, dataJSON, archJSON)
+}
 
 func LoadRawData(dataPath, archivePath string) (*InputData, error) {
 	rawBytes, err := os.ReadFile(dataPath)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", dataPath, err)
 	}
-	dataJSON := string(rawBytes)
-
 	archBytes, err := os.ReadFile(archivePath)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", archivePath, err)
 	}
-	archJSON := string(archBytes)
-
-	gc := buildGameCache(dataJSON)
-	applyArchive(gc, archJSON)
-	gc.ultimateData = computeUltimateData(gc, archJSON)
-
-	return buildOutput(gc, dataJSON, archJSON), nil
+	return loadFromStrings(string(rawBytes), string(archBytes)), nil
 }
-
-// ── buildGameCache ──
 
 func buildGameCache(dataJSON string) *gameCache {
 	sm := buildSkillTable(dataJSON)
 
-	// Disks
 	diskMap := make(map[int]*diskInfo)
 	gjson.Get(dataJSON, "disks").ForEach(func(_, v gjson.Result) bool {
 		id := int(v.Get("diskId").Int())
@@ -202,7 +172,6 @@ func buildGameCache(dataJSON string) *gameCache {
 		return true
 	})
 
-	// Ambers
 	amberMap := make(map[int]*amberInfo)
 	gjson.Get(dataJSON, "ambers").ForEach(func(_, v gjson.Result) bool {
 		id := int(v.Get("amberId").Int())
@@ -219,7 +188,6 @@ func buildGameCache(dataJSON string) *gameCache {
 		return true
 	})
 
-	// Materials (sorted by origin)
 	type matSort struct {
 		id     int
 		name   string
@@ -234,15 +202,15 @@ func buildGameCache(dataJSON string) *gameCache {
 		})
 		return true
 	})
-	sort.SliceStable(mats, func(i, j int) bool { return mats[i].origin < mats[j].origin })
+	slices.SortStableFunc(mats, func(a, b matSort) int { return cmp.Compare(a.origin, b.origin) })
 	materials := make([]iMaterial, len(mats))
-	matOriginMap := make(map[int]string, len(mats))
+	matOriginMap := make(map[int]OriginType, len(mats))
 	for i, m := range mats {
-		materials[i] = iMaterial{MaterialID: m.id, Name: m.name, Origin: m.origin}
-		matOriginMap[m.id] = m.origin
+		o := parseOriginType(m.origin)
+		materials[i] = iMaterial{MaterialID: m.id, Name: m.name, Origin: o}
+		matOriginMap[m.id] = o
 	}
 
-	// Equips
 	var equips []equipInfo
 	gjson.Get(dataJSON, "equips").ForEach(func(_, v gjson.Result) bool {
 		if v.Get("name").String() == "" {
@@ -260,7 +228,6 @@ func buildGameCache(dataJSON string) *gameCache {
 		return true
 	})
 
-	// Chefs
 	var chefs []iChef
 	gjson.Get(dataJSON, "chefs").ForEach(func(_, v gjson.Result) bool {
 		if v.Get("name").String() == "" {
@@ -310,7 +277,6 @@ func buildGameCache(dataJSON string) *gameCache {
 		return true
 	})
 
-	// Recipes
 	var recipes []iRecipe
 	gjson.Get(dataJSON, "recipes").ForEach(func(_, v gjson.Result) bool {
 		if v.Get("name").String() == "" {
@@ -345,14 +311,16 @@ func buildGameCache(dataJSON string) *gameCache {
 				Bake:      int(v.Get("bake").Int()),
 				Steam:     int(v.Get("steam").Int()),
 				Materials: mats,
-				Condiment: v.Get("condiment").String(),
+				Condiment: parseCondimentType(v.Get("condiment").String()),
 				Tags:      tags,
+				TagSet:    intsToBoolSet(tags),
 				LimitVal:  limit,
 			},
 			BasePrice: price,
 			ExPrice:   v.Get("exPrice").Float(),
 			Limit:     limit,
 		})
+		computeRecipeMasks(&recipes[len(recipes)-1].Recipe)
 		return true
 	})
 
@@ -379,12 +347,9 @@ func readIntSlice(v gjson.Result) []int {
 	return out
 }
 
-// ── applyArchive ──
-
 func applyArchive(gc *gameCache, archJSON string) {
 	msg := gjson.Get(archJSON, "msg")
 
-	// Build archive recipe map: id -> {got, ex}
 	type archRec struct{ got, ex string }
 	archRecipes := make(map[int]archRec)
 	msg.Get("recipes").ForEach(func(_, v gjson.Result) bool {
@@ -406,13 +371,8 @@ func applyArchive(gc *gameCache, archJSON string) {
 		}
 	}
 
-	// Build equip lookup
-	equipMap := make(map[int]*equipInfo, len(gc.equips))
-	for i := range gc.equips {
-		equipMap[gc.equips[i].equipID] = &gc.equips[i]
-	}
+	equipMap := gc.equipByID
 
-	// Build archive chef map
 	type archCh struct {
 		got, ult string
 		equip    int
@@ -440,8 +400,8 @@ func applyArchive(gc *gameCache, archJSON string) {
 		if ac.got == "是" || ac.got == "true" {
 			c.Got = true
 		}
-		if ac.equip != 0 {
-			if eq, ok := equipMap[ac.equip]; ok {
+		if ac.equip != 0 && ac.equip < len(equipMap) {
+			if eq := equipMap[ac.equip]; eq != nil {
 				c.EquipID = eq.equipID
 			}
 		}
@@ -502,8 +462,6 @@ func amberAllEffects(sm map[int]*skillEntry, amb *amberInfo) [][]SkillEffect {
 	return allEffect
 }
 
-// ── computeUltimateData ──
-
 func computeUltimateData(gc *gameCache, archJSON string) *ultimateResult {
 	archChefUlt := make(map[int]string) // chefID -> ult value
 	archChefGot := make(map[int]string) // chefID -> got value
@@ -531,9 +489,9 @@ func computeUltimateData(gc *gameCache, archJSON string) *ultimateResult {
 		var partialEffects, selfEffects []SkillEffect
 		for _, eff := range c.UltimateSkillEffect {
 			switch eff.Condition {
-			case "Partial", "Next":
+			case CondScopePartial, CondScopeNext:
 				partialEffects = append(partialEffects, eff)
-			case "Global":
+			case CondScopeGlobal:
 				merged := false
 				for gi := range globalEffects {
 					g := &globalEffects[gi]
@@ -546,7 +504,7 @@ func computeUltimateData(gc *gameCache, archJSON string) *ultimateResult {
 				if !merged {
 					globalEffects = append(globalEffects, eff)
 				}
-			case "Self":
+			case CondScopeSelf:
 				selfEffects = append(selfEffects, eff)
 			}
 		}
@@ -561,7 +519,7 @@ func computeUltimateData(gc *gameCache, archJSON string) *ultimateResult {
 		// SwordsUnited (qixia)
 		for _, skillID := range c.UltimateSkillList {
 			se, ok := gc.skillMap[skillID]
-			if !ok || len(se.effects) == 0 || se.effects[0].ConditionType != "SwordsUnited" {
+			if !ok || len(se.effects) == 0 || se.effects[0].ConditionType != CondTypeSwordsUnited {
 				continue
 			}
 			eff0 := se.effects[0]
@@ -570,8 +528,7 @@ func computeUltimateData(gc *gameCache, archJSON string) *ultimateResult {
 			}
 
 			matchCount := 0
-			for _, cv := range eff0.ConditionValueList {
-				condVal := interfaceToInt(cv)
+			for _, condVal := range eff0.ConditionValueList {
 				for j := range gc.chefs {
 					if gc.chefs[j].BaseChefID == condVal {
 						oc := gc.chefs[j].ChefID
@@ -591,17 +548,17 @@ func computeUltimateData(gc *gameCache, archJSON string) *ultimateResult {
 				for _, se := range se.effects {
 					if se.Tag == eff0.Tag {
 						switch se.Type {
-						case "Stirfry":
+						case EffStirfry:
 							q.Stirfry += se.Value
-						case "Boil":
+						case EffBoil:
 							q.Boil += se.Value
-						case "Knife":
+						case EffKnife:
 							q.Knife += se.Value
-						case "Fry":
+						case EffFry:
 							q.Fry += se.Value
-						case "Bake":
+						case EffBake:
 							q.Bake += se.Value
-						case "Steam":
+						case EffSteam:
 							q.Steam += se.Value
 						}
 					}
@@ -612,8 +569,6 @@ func computeUltimateData(gc *gameCache, archJSON string) *ultimateResult {
 
 	return &ultimateResult{global: globalEffects, partial: partialEntries, self: selfEntries, qixia: qixia}
 }
-
-// ── buildOutput ──
 
 func buildOutput(gc *gameCache, dataJSON, archJSON string) *InputData {
 	calGlobal := buildCalGlobalUltimate(gc.ultimateData.global)
@@ -635,7 +590,6 @@ func buildOutput(gc *gameCache, dataJSON, archJSON string) *InputData {
 		}
 	}
 
-	// Collect contests (680xxx rules)
 	type contestInfo struct {
 		name     string
 		ruleID   int
@@ -652,10 +606,9 @@ func buildOutput(gc *gameCache, dataJSON, archJSON string) *InputData {
 		contests = append(contests, contestInfo{name: cleaned, ruleID: id, groupIDs: readIntSliceFromArray(v.Get("Group"))})
 		return true
 	})
-	sort.Slice(contests, func(i, j int) bool { return contests[i].ruleID < contests[j].ruleID })
+	slices.SortFunc(contests, func(a, b contestInfo) int { return a.ruleID - b.ruleID })
 	fmt.Fprintf(os.Stderr, "Found %d contests\n", len(contests))
 
-	// Index all rules by ID for guest rule lookup
 	ruleIndex := make(map[int]gjson.Result)
 	gjson.Get(dataJSON, "rules").ForEach(func(_, v gjson.Result) bool {
 		ruleIndex[int(v.Get("Id").Int())] = v
@@ -682,8 +635,6 @@ func buildOutput(gc *gameCache, dataJSON, archJSON string) *InputData {
 	return output
 }
 
-// ── processGuestRule ──
-
 func processGuestRule(
 	gc *gameCache,
 	gr gjson.Result,
@@ -699,7 +650,6 @@ func processGuestRule(
 		DisableCookbookRank:     toBool(gr.Get("DisableCookbookRank")),
 		DisableChefSkillEffect:  toBool(gr.Get("DisableChefSkillEffect")),
 		DisableEquipSkillEffect: toBool(gr.Get("DisableEquipSkillEffect")),
-		DisableCondimentEffect:  toBool(gr.Get("DisableCondimentEffect")),
 		DisableDecorationEffect: toBool(gr.Get("DisableDecorationEffect")),
 		IsActivity:              toBool(gr.Get("IsActivity")),
 		SatisfyRewardType:       int(gr.Get("SatisfyRewardType").Int()),
@@ -707,12 +657,11 @@ func processGuestRule(
 		SatisfyDeductValue:      gr.Get("SatisfyDeductValue").Float(),
 		DecorationEffect:        gc.decorationEffect,
 		CalGlobalUltimateData:   calGlobal,
-		CalPartialChefIDs:       partialChefIDs,
+		CalPartialChefSet:       intsToBoolSet(partialChefIDs),
 		CalSelfUltimateData:     calSelf,
 		CalQixiaData:            gc.ultimateData.qixia,
 	}
 
-	// IntentList
 	gr.Get("IntentList").ForEach(func(_, row gjson.Result) bool {
 		rule.IntentList = append(rule.IntentList, readIntSliceFromArray(row))
 		return true
@@ -723,17 +672,18 @@ func processGuestRule(
 
 	rule.GlobalBuffList = readIntSliceFromArray(gr.Get("GlobalBuffList"))
 
-	// Materials: start from base, apply effects and quantity filters
 	mats := make([]Material, len(gc.materials))
 	for i, m := range gc.materials {
 		mats[i] = Material{MaterialID: m.MaterialID, Name: m.Name, Origin: m.Origin}
 	}
+	hasMaterialsEffect := false
 	gr.Get("MaterialsEffect").ForEach(func(_, v gjson.Result) bool {
 		mid := int(v.Get("MaterialID").Int())
 		eff := v.Get("Effect").Float()
 		for mi := range mats {
 			if mats[mi].MaterialID == mid {
 				mats[mi].Addition = toFixed2(mats[mi].Addition + eff)
+				hasMaterialsEffect = true
 				break
 			}
 		}
@@ -758,15 +708,15 @@ func processGuestRule(
 		mats = filtered
 	}
 	rule.Materials = mats
+	rule.MaterialsEffect = hasMaterialsEffect
 
 	cookbookRarityLimit := int(gr.Get("CookbookRarityLimit").Int())
 	hasCookbookLimit := gr.Get("CookbookRarityLimit").Exists()
 	chefRarityLimit := int(gr.Get("ChefRarityLimit").Int())
 	hasChefLimit := gr.Get("ChefRarityLimit").Exists()
 
-	// Read rule effect arrays once
 	type tagEffect struct{ tagID int; effect float64 }
-	type skillEffect struct{ skill string; effect float64 }
+	type skillEffect struct{ skill CookSkill; effect float64 }
 
 	readTagEffects := func(key string) []tagEffect {
 		var out []tagEffect
@@ -788,12 +738,11 @@ func processGuestRule(
 	})
 	var recipesSkillsEffects []skillEffect
 	gr.Get("RecipesSkillsEffect").ForEach(func(_, v gjson.Result) bool {
-		recipesSkillsEffects = append(recipesSkillsEffects, skillEffect{v.Get("Skill").String(), v.Get("Effect").Float()})
+		recipesSkillsEffects = append(recipesSkillsEffects, skillEffect{parseCookSkill(v.Get("Skill").String()), v.Get("Effect").Float()})
 		return true
 	})
 	enableChefTags := readIntSliceFromArray(gr.Get("EnableChefTags"))
 
-	// Recipes
 	var recipes []Recipe
 	for idx := range gc.recipes {
 		pr := gc.recipes[idx] // copy
@@ -801,7 +750,6 @@ func processGuestRule(
 			continue
 		}
 
-		// Apply rule additions
 		for _, tag := range pr.Tags {
 			for _, rte := range recipesTagsEffects {
 				if tag == rte.tagID {
@@ -833,10 +781,7 @@ func processGuestRule(
 	rule.Recipes = recipes
 
 	// Chefs
-	equipMap := make(map[int]*equipInfo, len(gc.equips))
-	for i := range gc.equips {
-		equipMap[gc.equips[i].equipID] = &gc.equips[i]
-	}
+	equipMap := gc.equipByID
 
 	var outChefs []Chef
 	for idx := range gc.chefs {
@@ -873,17 +818,15 @@ func processGuestRule(
 		}
 
 		chef := toChef(pc, addition)
-		chef.Disk.Level = chef.Disk.MaxLevel
 
 		var equipObj *Equip
 		if chef.EquipID != 0 {
-			if eq, ok := equipMap[chef.EquipID]; ok {
-				equipObj = &Equip{EquipID: eq.equipID, Effect: eq.effects}
-			}
+			eq := equipMap[chef.EquipID]
+			equipObj = &Equip{EquipID: eq.equipID, Effect: eq.effects}
 		}
 		chef.EquipEffect = equipObj
 
-		ApplyChefData(&chef, equipObj, true, calGlobal, nil, calSelf, nil, true, &rule, gc.ultimateData.qixia)
+		applyChefData(&chef, equipObj, calGlobal, nil, calSelf, &rule, gc.ultimateData.qixia)
 		outChefs = append(outChefs, chef)
 	}
 	rule.Chefs = outChefs
@@ -891,15 +834,13 @@ func processGuestRule(
 	return rule
 }
 
-// ── setIRecipeData ──
-
 func setIRecipeData(r *iRecipe, globalUlt []SkillEffect, useEx bool, rule *Rule) {
 	r.LimitVal = r.Limit
 	r.UltimateAddition = 0
 
 	if !rule.DisableChefSkillEffect {
 		for _, g := range globalUlt {
-			if g.Type == "MaxEquipLimit" && g.Rarity == r.Rarity {
+			if g.Type == EffMaxEquipLimit && g.Rarity == r.Rarity {
 				r.LimitVal += int(g.Value)
 			}
 		}
@@ -912,62 +853,99 @@ func setIRecipeData(r *iRecipe, globalUlt []SkillEffect, useEx bool, rule *Rule)
 	}
 }
 
+func computeRecipeMasks(r *Recipe) {
+	var price, basic uint64
+	var hasFish, hasCreation, hasMeat, hasVegetable bool
+	for i := range r.Materials {
+		switch r.Materials[i].Origin {
+		case OriginPond:
+			hasFish = true
+		case OriginWorkshop:
+			hasCreation = true
+		case OriginPasture, OriginCoop, OriginPigsty:
+			hasMeat = true
+		case OriginShed, OriginField, OriginForest:
+			hasVegetable = true
+		}
+	}
+	if hasFish {
+		price |= 1 << EffUseFish
+		basic |= 1 << EffBasicPriceUseFish
+	}
+	if hasCreation {
+		price |= 1 << EffUseCreation
+		basic |= 1 << EffBasicPriceUseCreation
+	}
+	if hasMeat {
+		price |= 1 << EffUseMeat
+		basic |= 1 << EffBasicPriceUseMeat
+	}
+	if hasVegetable {
+		price |= 1 << EffUseVegetable
+		basic |= 1 << EffBasicPriceUseVegetable
+	}
+	if r.Stirfry > 0 {
+		price |= 1 << EffUseStirfry
+		basic |= 1 << EffBasicPriceUseStirfry
+	}
+	if r.Boil > 0 {
+		price |= 1 << EffUseBoil
+		basic |= 1 << EffBasicPriceUseBoil
+	}
+	if r.Fry > 0 {
+		price |= 1 << EffUseFry
+		basic |= 1 << EffBasicPriceUseFry
+	}
+	if r.Knife > 0 {
+		price |= 1 << EffUseKnife
+		basic |= 1 << EffBasicPriceUseKnife
+	}
+	if r.Bake > 0 {
+		price |= 1 << EffUseBake
+		basic |= 1 << EffBasicPriceUseBake
+	}
+	if r.Steam > 0 {
+		price |= 1 << EffUseSteam
+		basic |= 1 << EffBasicPriceUseSteam
+	}
+	switch r.Condiment {
+	case CondimentSweet:
+		price |= 1 << EffUseSweet
+		basic |= 1 << EffBasicPriceUseSweet
+	case CondimentSour:
+		price |= 1 << EffUseSour
+		basic |= 1 << EffBasicPriceUseSour
+	case CondimentSpicy:
+		price |= 1 << EffUseSpicy
+		basic |= 1 << EffBasicPriceUseSpicy
+	case CondimentSalty:
+		price |= 1 << EffUseSalty
+		basic |= 1 << EffBasicPriceUseSalty
+	case CondimentBitter:
+		price |= 1 << EffUseBitter
+		basic |= 1 << EffBasicPriceUseBitter
+	case CondimentTasty:
+		price |= 1 << EffUseTasty
+		basic |= 1 << EffBasicPriceUseTasty
+	}
+	price |= 1 << EffCookbookPrice
+	basic |= 1 << EffBasicPrice
+	r.PriceMask = price
+	r.BasicMask = basic
+}
+
 func computeIRecipePriceAddition(effects []SkillEffect, r *Recipe) float64 {
 	var price float64
 	for _, eff := range effects {
-		if eff.ConditionType != "" {
+		if eff.ConditionType != CondTypeNone {
 			continue
 		}
-		if isIEffectPriceAddition(&eff, r) {
+		if r.PriceMask&(1<<eff.Type) != 0 || isRecipePriceSpecial(&eff, r, nil) {
 			price += eff.Value
 		}
 	}
 	return price
 }
-
-func isIEffectPriceAddition(eff *SkillEffect, r *Recipe) bool {
-	switch eff.Type {
-	case "UseAll":
-		return r.Rarity == eff.Rarity
-	case "UseFish":
-		return recipeHasMaterialOrigin(r, "池塘")
-	case "UseCreation":
-		return recipeHasMaterialOrigin(r, "作坊")
-	case "UseMeat":
-		return recipeHasMaterialOriginAny(r, "牧场", "鸡舍", "猪圈")
-	case "UseVegetable":
-		return recipeHasMaterialOriginAny(r, "菜棚", "菜地", "森林")
-	case "UseStirfry":
-		return r.Stirfry > 0
-	case "UseBoil":
-		return r.Boil > 0
-	case "UseFry":
-		return r.Fry > 0
-	case "UseKnife":
-		return r.Knife > 0
-	case "UseBake":
-		return r.Bake > 0
-	case "UseSteam":
-		return r.Steam > 0
-	case "UseSweet":
-		return r.Condiment == "Sweet"
-	case "UseSour":
-		return r.Condiment == "Sour"
-	case "UseSpicy":
-		return r.Condiment == "Spicy"
-	case "UseSalty":
-		return r.Condiment == "Salty"
-	case "UseBitter":
-		return r.Condiment == "Bitter"
-	case "UseTasty":
-		return r.Condiment == "Tasty"
-	case "CookbookPrice":
-		return true
-	}
-	return false
-}
-
-// ── getIRecipeQty ──
 
 func getIRecipeQty(r *iRecipe, mats []Material, rule *Rule) int {
 	maxQty := 1
@@ -998,10 +976,8 @@ func getIRecipeQty(r *iRecipe, mats []Material, rule *Rule) int {
 	return maxQty
 }
 
-// ── toChef ──
-
 func toChef(pc *iChef, addition float64) Chef {
-	return Chef{
+	c := Chef{
 		ChefID:              pc.ChefID,
 		Name:                pc.Name,
 		Rarity:              pc.Rarity,
@@ -1019,14 +995,32 @@ func toChef(pc *iChef, addition float64) Chef {
 		Disk:                pc.Disk,
 		Got:                 pc.Got,
 	}
+	c.TagSet = intsToBoolSet(pc.Tags)
+	return c
 }
 
-// ── buildCalGlobalUltimate ──
+// intsToBoolSet builds a []bool indexed by value for O(1) membership checks.
+func intsToBoolSet(ids []int) []bool {
+	if len(ids) == 0 {
+		return nil
+	}
+	max := 0
+	for _, v := range ids {
+		if v > max {
+			max = v
+		}
+	}
+	set := make([]bool, max+1)
+	for _, v := range ids {
+		set[v] = true
+	}
+	return set
+}
 
 func buildCalGlobalUltimate(global []SkillEffect) []SkillEffect {
-	skillTypes := []string{"Stirfry", "Boil", "Knife", "Fry", "Bake", "Steam"}
+	skillTypes := [6]EffType{EffStirfry, EffBoil, EffKnife, EffFry, EffBake, EffSteam}
 
-	skillVals := make(map[string]float64)
+	var skillVals [6]float64
 	var maleVal, femaleVal float64
 	limitVals := make(map[int]float64)
 	useAllVals := make(map[int]float64)
@@ -1039,43 +1033,51 @@ func buildCalGlobalUltimate(global []SkillEffect) []SkillEffect {
 			femaleVal = g.Value
 		default:
 			switch g.Type {
-			case "Stirfry", "Boil", "Knife", "Fry", "Bake", "Steam":
-				skillVals[g.Type] = g.Value
-			case "MaxEquipLimit":
+			case EffStirfry:
+				skillVals[0] = g.Value
+			case EffBoil:
+				skillVals[1] = g.Value
+			case EffKnife:
+				skillVals[2] = g.Value
+			case EffFry:
+				skillVals[3] = g.Value
+			case EffBake:
+				skillVals[4] = g.Value
+			case EffSteam:
+				skillVals[5] = g.Value
+			case EffMaxEquipLimit:
 				limitVals[g.Rarity] = g.Value
-			case "UseAll":
+			case EffUseAll:
 				useAllVals[g.Rarity] = g.Value
 			}
 		}
 	}
 
 	var result []SkillEffect
-	for _, st := range skillTypes {
-		if v, ok := skillVals[st]; ok && v != 0 {
-			result = append(result, SkillEffect{Type: st, Value: v, Condition: "Global", Cal: "Abs"})
+	for i, st := range skillTypes {
+		if skillVals[i] != 0 {
+			result = append(result, SkillEffect{Type: st, Value: skillVals[i], Condition: CondScopeGlobal, Cal: CalAbs})
 		}
 	}
 	for _, gv := range [2]struct{ tag int; val float64 }{{1, maleVal}, {2, femaleVal}} {
 		if gv.val != 0 {
 			for _, st := range skillTypes {
-				result = append(result, SkillEffect{Type: st, Value: gv.val, Condition: "Global", Cal: "Abs", Tag: gv.tag})
+				result = append(result, SkillEffect{Type: st, Value: gv.val, Condition: CondScopeGlobal, Cal: CalAbs, Tag: gv.tag})
 			}
 		}
 	}
 	for r := 1; r <= 5; r++ {
 		if v, ok := limitVals[r]; ok && v != 0 {
-			result = append(result, SkillEffect{Type: "MaxEquipLimit", Value: v, Condition: "Global", Cal: "Abs", Rarity: r})
+			result = append(result, SkillEffect{Type: EffMaxEquipLimit, Value: v, Condition: CondScopeGlobal, Cal: CalAbs, Rarity: r})
 		}
 	}
 	for r := 1; r <= 5; r++ {
 		if v, ok := useAllVals[r]; ok && v != 0 {
-			result = append(result, SkillEffect{Type: "UseAll", Value: v, Condition: "Global", Cal: "Percent", Rarity: r})
+			result = append(result, SkillEffect{Type: EffUseAll, Value: v, Condition: CondScopeGlobal, Cal: CalPercent, Rarity: r})
 		}
 	}
 	return result
 }
-
-// ── buildCalSelfUltimate ──
 
 func buildCalSelfUltimate(gc *gameCache, selfChefIDs []int) []SelfUltimateEntry {
 	idSet := make(map[int]bool, len(selfChefIDs))
@@ -1090,7 +1092,7 @@ func buildCalSelfUltimate(gc *gameCache, selfChefIDs []int) []SelfUltimateEntry 
 		}
 		var selfEffects []SkillEffect
 		for _, eff := range c.UltimateSkillEffect {
-			if eff.Condition == "Self" {
+			if eff.Condition == CondScopeSelf {
 				selfEffects = append(selfEffects, eff)
 			}
 		}
@@ -1101,26 +1103,33 @@ func buildCalSelfUltimate(gc *gameCache, selfChefIDs []int) []SelfUltimateEntry 
 	return result
 }
 
-// ── Intent/Buff parsing ──
-
 func parseIntentArray(dataJSON, key string) []Intent {
 	var out []Intent
 	gjson.Get(dataJSON, key).ForEach(func(_, v gjson.Result) bool {
-		out = append(out, Intent{
-			IntentID:       int(v.Get("intentId").Int()),
-			BuffID:         int(v.Get("buffId").Int()),
-			EffectType:     v.Get("effectType").String(),
-			EffectValue:    v.Get("effectValue").Float(),
-			ConditionType:  v.Get("conditionType").String(),
-			ConditionValue: toInterface(v.Get("conditionValue")),
-			LastRounds:     int(v.Get("lastRounds").Int()),
-		})
+		cvResult := v.Get("conditionValue")
+		condType := parseIntentCondType(v.Get("conditionType").String())
+		intent := Intent{
+			IntentID:      int(v.Get("intentId").Int()),
+			BuffID:        int(v.Get("buffId").Int()),
+			EffectType:    parseIntentEffType(v.Get("effectType").String()),
+			EffectValue:   v.Get("effectValue").Float(),
+			ConditionType: condType,
+			LastRounds:    int(v.Get("lastRounds").Int()),
+		}
+		intent.ConditionValueInt = int(cvResult.Int())
+		if cvResult.Type == gjson.String {
+			switch condType {
+			case IntCondCookSkill, IntCondGroup:
+				intent.CondValSkill = parseCookSkill(cvResult.String())
+			case IntCondCondimentSkill:
+				intent.CondValCondiment = parseCondimentType(cvResult.String())
+			}
+		}
+		out = append(out, intent)
 		return true
 	})
 	return out
 }
-
-// ── Helpers ──
 
 func readIntFloatMap(v gjson.Result) map[int]float64 {
 	if !v.Exists() || !v.IsObject() {
