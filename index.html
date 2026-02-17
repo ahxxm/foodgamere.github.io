@@ -15,6 +15,7 @@
     <script type="text/javascript" src="js/food.min.js?v=267"></script>
     <script type="text/javascript" src="js/query.cultivate.js?v=4"></script>
     <script type="text/javascript" src="js/banquet.optimizer.js?v=1"></script>
+    <script type="text/javascript" src="js/gather.optimizer.js?v=1"></script>
     <link rel="stylesheet" type="text/css" href="css/image.css?v=173" />
     <script>
         $(function () {
@@ -1701,6 +1702,15 @@
                         </thead>
                     </table>
                 </div>
+                <hr>
+                <div>
+                    <button class="btn btn-primary" id="btn-gather-optimize">优化采集</button>
+                    <label style="margin-left:10px;font-weight:normal">
+                        <input type="checkbox" id="chk-gather-include-dedicated">
+                        包含单项采集&ge;12厨师 (大概率已用于玉片区)
+                    </label>
+                </div>
+                <div id="gather-results"></div>
             </div>
             <div class="tab-pane pane-condiments">
                 <div>
