@@ -3496,8 +3496,184 @@ var BanquetOptimizer = (function() {
         // 将最佳模拟状态写回系统（这里才触碰DOM）
         var memTotal = 0;
         if (_bestSimState) {
-            // 先恢复到最佳状态计算内存分数明细
+            // 先恢复到最佳状态
             _simState = _bestSimState;
+            
+            // 补充缺失的厨师：如果有位置没有厨师，用未使用的厨师补上并重选菜谱
+            var usedChefIds = {};
+            for (var ri = 0; ri < _rules.length; ri++) {
+                if (!_shouldProcessRule(ri)) continue;  // 跳过不需要处理的贵客
+                var rule = _rules[ri];
+                var numChefs = rule.IntentList ? rule.IntentList.length : 3;
+                for (var ci = 0; ci < numChefs; ci++) {
+                    if (_simState[ri][ci].chefId) {
+                        usedChefIds[_simState[ri][ci].chefId] = true;
+                    }
+                }
+            }
+            
+            // 辅助函数：为指定位置优化菜谱（只替换厨师技法不达标的菜谱，保留能做的）
+            function _fillRecipesWithSkillCheck(ri, ci) {
+                var chefObj = _simState[ri][ci].chefObj;
+                var usedRecipeIds = {};
+                // 收集当前贵客已用的菜谱（排除当前位置）
+                var rule = _rules[ri];
+                var numChefs = rule.IntentList ? rule.IntentList.length : 3;
+                for (var oci = 0; oci < numChefs; oci++) {
+                    if (oci === ci) continue; // 排除当前位置
+                    for (var oreci = 0; oreci < 3; oreci++) {
+                        var r = _simState[ri][oci].recipes[oreci];
+                        if (r && r.data) usedRecipeIds[r.data.recipeId] = true;
+                    }
+                }
+                
+                // 检查当前位置每个菜谱，只替换技法不达标的
+                var skills = ['stirfry', 'boil', 'knife', 'fry', 'bake', 'steam'];
+                for (var reci = 0; reci < 3; reci++) {
+                    var currentRecipe = _simState[ri][ci].recipes[reci];
+                    var needReplace = false;
+                    
+                    if (!currentRecipe || !currentRecipe.data) {
+                        // 没有菜谱，需要分配
+                        needReplace = true;
+                    } else if (chefObj) {
+                        // 检查厨师技法是否足够做这道菜
+                        for (var sk = 0; sk < skills.length; sk++) {
+                            var s = skills[sk];
+                            if (currentRecipe.data[s] > 0 && (!chefObj[s] || chefObj[s] < currentRecipe.data[s])) {
+                                needReplace = true;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    if (needReplace) {
+                        // 清空当前菜谱
+                        _simState[ri][ci].recipes[reci] = {data: null, quantity: 0, max: 0};
+                        // 找能做的最高分菜谱
+                        var recipeRanking = _fastGetRecipeRanking(ri, ci, reci, 50, true);
+                        for (var rk = 0; rk < recipeRanking.length; rk++) {
+                            var rd = recipeRanking[rk];
+                            if (usedRecipeIds[rd.recipeId]) continue;
+                            // 检查厨师技法是否足够
+                            var canMake = true;
+                            if (chefObj && rd.data) {
+                                for (var sk = 0; sk < skills.length; sk++) {
+                                    var s = skills[sk];
+                                    if (rd.data[s] > 0 && (!chefObj[s] || chefObj[s] < rd.data[s])) {
+                                        canMake = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (canMake) {
+                                _simSetRecipe(ri, ci, reci, rd.recipeId);
+                                usedRecipeIds[rd.recipeId] = true;
+                                break;
+                            }
+                        }
+                    } else {
+                        // 保留当前菜谱，加入已用列表
+                        usedRecipeIds[currentRecipe.data.recipeId] = true;
+                    }
+                }
+            }
+            
+            // 第一轮：补充缺失厨师并分配菜谱
+            var fixedPositions = [];
+            for (var ri = 0; ri < _rules.length; ri++) {
+                if (!_shouldProcessRule(ri)) continue;  // 跳过不需要处理的贵客
+                var rule = _rules[ri];
+                var numChefs = rule.IntentList ? rule.IntentList.length : 3;
+                for (var ci = 0; ci < numChefs; ci++) {
+                    if (!_simState[ri][ci].chefId) {
+                        var chefRanking = _fastGetChefRanking(ri, ci, true);
+                        for (var j = 0; j < chefRanking.length; j++) {
+                            if (!usedChefIds[chefRanking[j].chefId]) {
+                                _simSetChef(ri, ci, chefRanking[j].chefId);
+                                usedChefIds[chefRanking[j].chefId] = true;
+                                _fillRecipesWithSkillCheck(ri, ci);
+                                fixedPositions.push({ri: ri, ci: ci});
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // 第二轮：对每个位置单独迭代优化厨师和菜谱，直到收敛
+            // 每次替换菜谱后重新查找最优厨师，循环直到不再改进
+            var maxIterations = 10;
+            for (var fi = 0; fi < fixedPositions.length; fi++) {
+                var pos = fixedPositions[fi];
+                var rule = _rules[pos.ri];
+                var allChefs = rule.chefs || [];
+                
+                for (var iter = 0; iter < maxIterations; iter++) {
+                    var currentChefId = _simState[pos.ri][pos.ci].chefId;
+                    var currentScore = _calcRuleScore(pos.ri, true);
+                    var bestScore = currentScore;
+                    var bestChefId = currentChefId;
+                    var bestRecipes = [];
+                    for (var reci = 0; reci < 3; reci++) {
+                        var r = _simState[pos.ri][pos.ci].recipes[reci];
+                        bestRecipes.push(r && r.data ? r.data.recipeId : null);
+                    }
+                    
+                    // 尝试每个未使用的厨师
+                    for (var j = 0; j < allChefs.length; j++) {
+                        var candidateId = allChefs[j].chefId;
+                        // 跳过已被其他位置使用的厨师（但允许当前位置的厨师）
+                        if (usedChefIds[candidateId] && candidateId !== currentChefId) continue;
+                        // 跳过未拥有的厨师（如果启用了只用已有）
+                        if (_cachedConfig.useGot && !allChefs[j].got) continue;
+                        
+                        // 换厨师并重新分配菜谱
+                        _simSetChef(pos.ri, pos.ci, candidateId);
+                        _fillRecipesWithSkillCheck(pos.ri, pos.ci);
+                        var newScore = _calcRuleScore(pos.ri, true);
+                        
+                        if (newScore > bestScore) {
+                            bestScore = newScore;
+                            bestChefId = candidateId;
+                            bestRecipes = [];
+                            for (var reci = 0; reci < 3; reci++) {
+                                var r = _simState[pos.ri][pos.ci].recipes[reci];
+                                bestRecipes.push(r && r.data ? r.data.recipeId : null);
+                            }
+                        }
+                    }
+                    
+                    // 应用本轮最佳结果
+                    if (bestChefId !== currentChefId) {
+                        usedChefIds[currentChefId] = false;
+                        usedChefIds[bestChefId] = true;
+                    }
+                    _simSetChef(pos.ri, pos.ci, bestChefId);
+                    for (var reci = 0; reci < 3; reci++) {
+                        _simSetRecipe(pos.ri, pos.ci, reci, bestRecipes[reci]);
+                    }
+                    
+                    // 如果没有改进，该位置收敛，进入下一个位置
+                    if (bestScore <= currentScore) break;
+                }
+            }
+            
+            // 第三轮：如果饱食度不达标，调用现有的菜谱爬山函数
+            if (!_isAllSatietyOk()) {
+                // 先把当前状态设为最佳状态，这样爬山函数才能基于当前状态优化
+                _bestSimState = _cloneSimState(_simState);
+                _bestScore = _fastCalcScore();
+                
+                _climbRecipes();
+                _simState = _cloneSimState(_bestSimState);
+                _climbRecipeSwap();
+            }
+            
+            // 更新最佳状态
+            _bestSimState = _cloneSimState(_simState);
+            
+            // 计算内存分数明细
             var memScores = [];
             for (var ri = 0; ri < _rules.length; ri++) {
                 var rScore = _calcRuleScore(ri, true);
