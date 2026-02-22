@@ -2683,12 +2683,13 @@ function refreshUnultimatedChefList(gameData) {
             }
         }
         
-        // 勾选已有，只显示已有且未修炼的厨师
+        // 判断是否被"已有"过滤（仅影响"未修炼"分类，"全部"分类始终显示）
+        var isGotFiltered = false;
         if (gotChecked) {
             var isOwned = chef.got || (configIds.allSet && configIds.allSet[String(chef.chefId)]);
-            if (!isOwned) continue;
-            // 跳过已修炼的（除非是光环厨师）
-            if (!isUnultimated && !isAura) continue;
+            if (!isOwned || (!isUnultimated && !isAura)) {
+                isGotFiltered = true;
+            }
         }
         
         // 标记是否已选中
@@ -2725,7 +2726,8 @@ function refreshUnultimatedChefList(gameData) {
             skillDesc: skillDesc,
             isSelected: isSelected,
             isUnultimated: isUnultimated,
-            isAura: isAura
+            isAura: isAura,
+            isGotFiltered: isGotFiltered
         });
     }
     
@@ -2769,7 +2771,7 @@ function refreshUnultimatedChefList(gameData) {
         var item = list[j];
         var selectedClass = item.isSelected ? ' selected' : '';
         
-        html += '<div class="unultimated-chef-item' + selectedClass + '" data-chef-id="' + item.chefId + '" data-name="' + item.name + '" data-is-unultimated="' + (item.isUnultimated ? '1' : '0') + '" data-is-aura="' + (item.isAura ? '1' : '0') + '">';
+        html += '<div class="unultimated-chef-item' + selectedClass + '" data-chef-id="' + item.chefId + '" data-name="' + item.name + '" data-is-unultimated="' + (item.isUnultimated ? '1' : '0') + '" data-is-aura="' + (item.isAura ? '1' : '0') + '" data-is-got-filtered="' + (item.isGotFiltered ? '1' : '0') + '">';
         html += '<div class="chef-check">' + (item.isSelected ? '✓' : '') + '</div>';
         html += '<div class="chef-info">';
         html += '<span class="chef-name">' + item.name + '</span>';
@@ -2869,9 +2871,13 @@ function filterUnultimatedChefItems($container, category) {
     $container.find('.unultimated-chef-item').each(function() {
         var $item = $(this);
         if (category === 'all') {
+            // 全部分类：显示所有厨师，不受"已有"勾选框限制
             $item.show();
         } else if (category === 'unultimated') {
-            $item.toggle($item.attr('data-is-unultimated') === '1');
+            // 未修炼分类：只显示未修炼的，且受"已有"勾选框过滤
+            var isUnultimated = $item.attr('data-is-unultimated') === '1';
+            var isGotFiltered = $item.attr('data-is-got-filtered') === '1';
+            $item.toggle(isUnultimated && !isGotFiltered);
         }
     });
 }
