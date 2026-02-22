@@ -2,8 +2,12 @@
 
 Standalone binary for food game banquet contest optimization. Reads raw game data directly.
 
+## CLI
+
 ```bash
-go run . /path/to/data.min.json /path/to/yx518-archive.json [ruleId]
+go build -ldflags="-s -w" -o banquet-optimizer .
+./banquet-optimizer ../../data/data.min.json archive.json        # all contests
+./banquet-optimizer ../../data/data.min.json archive.json 680045 # single contest
 ```
 
 ### PGO (Profile-Guided Optimization)
