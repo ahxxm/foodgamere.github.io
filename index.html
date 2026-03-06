@@ -301,6 +301,16 @@
                                     </label>
                                 </span>
                             </div>
+                            <div class="inline-wrapper select-wrapper" data-toggle="tooltip" title="选择食材,排除含该食材的菜谱">
+                                <select id="chk-recipe-material-exclude" multiple class="monitor-none"
+                                    data-live-search="true" data-live-search-placeholder="查找"
+                                    data-width="120px" data-dropdown-align-right='auto'
+                                    data-none-selected-text="排除食材" data-selected-text-format="count>2"
+                                    data-count-selected-text="{0} 食材" data-none-results-text="没有找到"
+                                    data-actions-box="true" data-actions-box-only-clear="true"
+                                    data-deselect-all-text="清空">
+                                </select>
+                            </div>
                             <div class="input-group">
                                 <div class="inline-wrapper select-wrapper input-group-first" data-toggle="tooltip"
                                     title="选择开业贵客,过滤菜谱">
@@ -2819,7 +2829,7 @@
             <div class="modal-content">
                 <div class="modal-header text-center">
                     <a class="close" data-dismiss="modal"><span>&times;</span></a>
-                    <span class="modal-title">导入跑分结果</h3>
+                    <span class="modal-title">导入跑分结果></h3>
                 </div>
                 <div class="modal-body text-center">
                     <p class='text-primary'>将宴会跑分结果复制到框中 (只导入厨师和菜谱)</p>
@@ -2982,6 +2992,52 @@
             </div>
         </div>
     </div>
+
+    <!-- 前10名组合 Modal -->
+    <div class="modal fade" id="top10-modal" tabindex="-1" role="dialog">
+        <div class="modal-dialog modal-lg" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal" aria-label="关闭">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                    <h4 class="modal-title">前10名组合</h4>
+                </div>
+                <div class="modal-body" id="top10-modal-body">
+                    <!-- 动态生成的组合卡片将插入这里 -->
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">关闭</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 导入组合 Modal -->
+    <div class="modal fade" id="top10-import-modal" tabindex="-1" role="dialog">
+        <div class="modal-dialog" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal" aria-label="关闭">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                    <h4 class="modal-title">导入组合</h4>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="top10-import-textarea">请粘贴组合数据（JSON格式）：</label>
+                        <textarea class="form-control" id="top10-import-textarea" rows="10" placeholder='粘贴组合数据...'></textarea>
+                    </div>
+                    <div id="top10-import-message" class="alert" style="display: none; margin-top: 10px;"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" id="btn-top10-import-confirm">确定导入</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
 </body>
 
 <script>
@@ -2991,6 +3047,7 @@
     var STORAGE_KEY_PREFIX = 'competition_algorithm_';
     var STORAGE_LIST_KEY = 'competition_algorithm_list';
     var STORAGE_ACTIVE_KEY = 'competition_algorithm_active';
+    var STORAGE_AUTO_CONDIMENT_KEY = 'competition_auto_condiment';
     var algorithmList = [];
     var activeAlgorithmId = null;
 
@@ -3089,6 +3146,22 @@
         }
     }
 
+    function getAutoCondimentEnabled() {
+        try {
+            var stored = localStorage.getItem(STORAGE_AUTO_CONDIMENT_KEY);
+            if (stored === null || stored === undefined) return true;
+            return stored === '1';
+        } catch (e) {
+            return true;
+        }
+    }
+
+    function setAutoCondimentEnabled(enabled) {
+        try {
+            localStorage.setItem(STORAGE_AUTO_CONDIMENT_KEY, enabled ? '1' : '0');
+        } catch (e) {}
+    }
+
     function executeAlgorithm(code) {
         try {
             // 使用间接eval调用，确保在全局作用域执行
@@ -3133,13 +3206,18 @@
                         '</div>' +
                         '<button id="btn-delete-current-algorithm" class="btn btn-danger" style="white-space: nowrap; height: 38px;" disabled><span class="glyphicon glyphicon-trash"></span> 删除算法</button>' +
                     '</div>' +
+                    '<div style="margin-top: 6px; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between;">' +
+                        '<span style="font-weight: bold; font-size: 14px;">自动搭配调料</span>' +
+                        '<input type="checkbox" id="chk-competition-auto-condiment" data-toggle="toggle" data-on="开" data-off="关" data-onstyle="default" data-size="small" data-width="56px" checked>' +
+                    '</div>' +
                 '</div>' +
-                '<div style="padding: 12px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; font-size: 13px; color: #856404;">' +
-                    '<strong>注意：</strong>导入的算法文件会保存在浏览器本地存储中，刷新页面后仍然有效。删除算法后需要刷新页面恢复默认算法。' +
-                '</div>' +
+
             '</div>' +
         '</div>';
         $('body').append(modalHtml);
+        if ($.fn.bootstrapToggle) {
+            $('#chk-competition-auto-condiment').bootstrapToggle();
+        }
     }
 
     function updateAlgorithmList() {
@@ -3161,7 +3239,15 @@
         }
         
         // 更新删除按钮状态
-        $('#btn-delete-current-algorithm').prop('disabled', !activeAlgorithmId);
+        // 只要列表中有算法就可以删除（删除当前选中的算法）
+        var hasAlgorithms = algorithmList.length > 0;
+        $('#btn-delete-current-algorithm').prop('disabled', !hasAlgorithms);
+        
+        // 如果有算法但没有激活的，默认选中第一个
+        if (hasAlgorithms && !activeAlgorithmId) {
+            var firstAlgo = algorithmList[0];
+            $select.val(firstAlgo.id);
+        }
     }
 
 
@@ -3170,6 +3256,11 @@
         $(document).on('click', '#btn-competition-settings', function() {
             $('#competition-settings-modal').css('display', 'flex');
             updateAlgorithmList();
+            var enabled = getAutoCondimentEnabled();
+            $('#chk-competition-auto-condiment').prop('checked', enabled);
+            if ($('#chk-competition-auto-condiment').parent().hasClass('toggle')) {
+                $('#chk-competition-auto-condiment').bootstrapToggle(enabled ? 'on' : 'off');
+            }
         });
 
         $(document).on('click', '#close-settings-modal', function() {
@@ -3242,24 +3333,31 @@
             updateAlgorithmList();
         });
 
+        $(document).on('change', '#chk-competition-auto-condiment', function() {
+            setAutoCondimentEnabled($(this).prop('checked'));
+        });
+
         $(document).on('click', '#btn-delete-current-algorithm', function() {
-            if (!activeAlgorithmId) {
-                showAlert('当前没有使用自定义算法', '提示');
+            // 获取当前选中的算法（从下拉框）
+            var selectedId = $('#algorithm-select').val();
+            
+            if (!selectedId) {
+                showAlert('请先选择要删除的算法', '提示');
                 return;
             }
             
-            var activeAlgo = algorithmList.find(function(a) { return a.id === activeAlgorithmId; });
-            if (!activeAlgo) return;
+            var selectedAlgo = algorithmList.find(function(a) { return a.id === selectedId; });
+            if (!selectedAlgo) return;
             
-            if (confirm('确定要删除算法 "' + activeAlgo.name + '" 吗？删除后将恢复使用默认算法。')) {
-                if (deleteAlgorithm(activeAlgorithmId)) {
-                    // 清除全局 CompetitionOptimizer 对象
-                    if (typeof window.CompetitionOptimizer !== 'undefined') {
+            if (confirm('确定要删除算法 "' + selectedAlgo.name + '" 吗？' + (selectedId === activeAlgorithmId ? '删除后将恢复使用默认算法。' : ''))) {
+                if (deleteAlgorithm(selectedId)) {
+                    // 如果删除的是当前激活的算法，清除全局 CompetitionOptimizer 对象
+                    if (selectedId === activeAlgorithmId && typeof window.CompetitionOptimizer !== 'undefined') {
                         delete window.CompetitionOptimizer;
                         console.log('[厨神大赛] 已清除 CompetitionOptimizer');
                     }
                     
-                    showAlert('算法已删除！已恢复使用默认算法。', '成功');
+                    showAlert('算法已删除！' + (selectedId === activeAlgorithmId ? '已恢复使用默认算法。' : ''), '成功');
                     updateAlgorithmList();
                 }
             }
