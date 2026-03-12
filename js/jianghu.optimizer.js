@@ -134,6 +134,15 @@ var JianghuOptimizer = (function() {
         '御弟哥哥': { normal: 82456, special: 103070 }
     };
 
+    // 贤客楼：5档分数，按高到低存储（5档 -> 1档）
+    // 数据来源：贵客-工作表1.csv
+    var XIANKE_TIER_SCORES = {
+        '王老板 周1357': [60000, 30000, 10000, 2000, 200],
+        '土地婆 周2467': [60000, 30000, 10000, 2000, 200],
+        '风水大师 周135': [200000, 130000, 80000, 40000, 20000],
+        '风水大师 周246': [200000, 130000, 80000, 40000, 20000]
+    };
+
     // 保留风云宴的数据结构以兼容接口
     var BANQUET_LEVELS = [
         { id: 'jianghu', name: '江湖帖', dual: false, rewards: [] }
@@ -142,9 +151,9 @@ var JianghuOptimizer = (function() {
     var BANQUET_TIER_SCORES = {};
 
     /**
-     * 根据当前规则中的贵客Title，查找对应的江湖帖分数数据
+     * 根据当前规则中的贵客Title，查找对应的江湖帖/贤客楼分数数据
      * @param {string} title1 - 贵客Title（从规则标题中提取）
-     * @returns {string|null} JIANGHU_TIER_SCORES中的key（贵客名称）
+     * @returns {string|null} 分数表中的key
      */
     function _findTierScoreKey(title1, title2) {
         if (!title1) return null;
@@ -160,26 +169,43 @@ var JianghuOptimizer = (function() {
                 return guestName;
             }
         }
+
+        // 贤客楼规则标题格式：
+        // 例如："贤客楼 王老板 一 金币 周1357"、"贤客楼 风水大师 五 切蒸煮符文 周246"
+        var xiankeMatch = title1.match(/贤客楼\s+([^\s]+)\s+[一二三四五]\s+.*\s+(周\d+)/);
+        if (xiankeMatch && xiankeMatch[1] && xiankeMatch[2]) {
+            var xiankeKey = xiankeMatch[1] + ' ' + xiankeMatch[2];
+            if (XIANKE_TIER_SCORES[xiankeKey]) {
+                return xiankeKey;
+            }
+        }
         
         return null;
     }
 
     /**
      * 获取指定贵客在指定档位的目标分数
-     * @param {string} key - JIANGHU_TIER_SCORES中的key（贵客名称）
-     * @param {number} levelIndex - 级别索引（江湖帖固定为0）
-     * @param {number} tierIndex - 档位索引 (0=特级, 1=普通)
+     * @param {string} key - 分数表中的key
+     * @param {number} levelIndex - 级别索引（江湖帖/贤客楼固定为0）
+     * @param {number} tierIndex - 江湖帖: 0=特级,1=普通；贤客楼: 0=5档最高,4=1档最低
      * @returns {number|null}
      */
     function _getTierScore(key, levelIndex, tierIndex) {
-        if (!key || !JIANGHU_TIER_SCORES[key]) return null;
-        var data = JIANGHU_TIER_SCORES[key];
-        
-        // tierIndex: 0=特级, 1=普通
-        if (tierIndex === 0) {
-            return data.special;
-        } else if (tierIndex === 1) {
-            return data.normal;
+        if (!key) return null;
+        if (JIANGHU_TIER_SCORES[key]) {
+            var data = JIANGHU_TIER_SCORES[key];
+            
+            // tierIndex: 0=特级, 1=普通
+            if (tierIndex === 0) {
+                return data.special;
+            } else if (tierIndex === 1) {
+                return data.normal;
+            }
+        }
+        if (XIANKE_TIER_SCORES[key]) {
+            if (tierIndex >= 0 && tierIndex < XIANKE_TIER_SCORES[key].length) {
+                return XIANKE_TIER_SCORES[key][tierIndex];
+            }
         }
         
         return null;
@@ -5090,6 +5116,7 @@ var JianghuOptimizer = (function() {
         BANQUET_LEVELS: BANQUET_LEVELS,
         BANQUET_TIER_SCORES: BANQUET_TIER_SCORES,
         JIANGHU_TIER_SCORES: JIANGHU_TIER_SCORES,
+        XIANKE_TIER_SCORES: XIANKE_TIER_SCORES,
         findTierScoreKey: _findTierScoreKey,
         getTierScore: _getTierScore
     };
