@@ -912,6 +912,7 @@
     margin-top: 6px;
     max-height: 420px;
     overflow-y: auto;
+    overflow-x: hidden;
 }
 
 .collection-sort-item {
@@ -1120,7 +1121,7 @@
 .collection-sort-item-actions {
     display: inline-flex;
     align-items: center;
-    gap: 3px;
+    gap: 8px;
     flex: 0 0 auto;
 }
 
@@ -1156,7 +1157,7 @@
 .collection-sort-drag-handle {
     color: #8c99a6;
     cursor: move;
-    font-size: 14px;
+    font-size: 18px;
 }
 
 .collection-sort-empty {
@@ -1717,6 +1718,9 @@
 
     .collection-sort-item {
         padding: 8px 10px;
+        display: inline-flex;
+        width: max-content;
+        min-width: 100%;
     }
 
     .collection-sort-name {
@@ -1725,10 +1729,26 @@
 
     .collection-sort-item-main {
         gap: 8px;
+        flex: 1 0 auto;
+        min-width: 0;
     }
 
     .collection-sort-divider {
         display: none;
+    }
+
+    .collection-sort-list {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        padding-bottom: 4px;
+    }
+
+    .collection-sort-item-actions {
+        flex: 0 0 auto;
+        gap: 10px;
     }
 
     .collection-team-saved-modal .modal-body,
@@ -1792,8 +1812,6 @@
     .collection-team-scheme-btn {
         flex: 1 1 0;
     }
-
-
 /* 配置按钮样式 */
 .collection-config-btn {
     padding: 2px 8px;
