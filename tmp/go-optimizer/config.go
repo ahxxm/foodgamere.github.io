@@ -16,7 +16,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		RecipeSeedK:     5,
-		ChefPerSeed:     3,
+		ChefPerSeed:     5,
 		RecipeTopN:      5,
 		MaxRounds:       5,
 		RefineIter:      5,
