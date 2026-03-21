@@ -940,6 +940,108 @@ func (o *Optimizer) findRecipeIdx(ri, recipeID int) int {
 	return -1
 }
 
+// climbChefPermutation tries all permutations of the current chefs within each
+// guest. Intents are position-bound, so moving a chef to a different seat
+// changes which intents apply to its recipes, potentially unlocking higher
+// scores after recipe re-fill.
+func (o *Optimizer) climbChefPermutation() bool {
+	improved := false
+	for ri := range o.rules {
+		nc := o.numChefs(ri)
+		chefIdxs := make([]int, nc)
+		allFilled := true
+		for ci := 0; ci < nc; ci++ {
+			chefIdxs[ci] = o.bestSimState[ri][ci].ChefIdx
+			if chefIdxs[ci] < 0 {
+				allFilled = false
+			}
+		}
+		if !allFilled {
+			continue
+		}
+
+		savedBest := o.bestScore
+		savedBestState := cloneSimState(o.bestSimState)
+
+		// generate all permutations of [0..nc-1]
+		perm := make([]int, nc)
+		for i := range perm {
+			perm[i] = i
+		}
+		// Heap's algorithm iterative
+		c := make([]int, nc)
+		tryPerm := func() {
+			// skip identity
+			isIdentity := true
+			for i := 0; i < nc; i++ {
+				if perm[i] != i {
+					isIdentity = false
+					break
+				}
+			}
+			if isIdentity {
+				return
+			}
+			o.setSimState(cloneSimState(savedBestState))
+			for ci := 0; ci < nc; ci++ {
+				o.simSetChef(ri, ci, chefIdxs[perm[ci]])
+				for reci := 0; reci < 3; reci++ {
+					o.simSetRecipe(ri, ci, reci, -1)
+				}
+			}
+			for ci := 0; ci < nc; ci++ {
+				o.greedyFillRecipes(ri, ci)
+			}
+			// quick stabilization pass
+			for pass := 0; pass < 2; pass++ {
+				changed := false
+				for ci := 0; ci < nc; ci++ {
+					for reci := 0; reci < 3; reci++ {
+						cur := o.simState[ri][ci].RecipeIdxs[reci]
+						rk := o.getRecipeRanking(ri, ci, reci, 1)
+						if len(rk) > 0 && rk[0].recIdx != cur {
+							o.simSetRecipe(ri, ci, reci, rk[0].recIdx)
+							changed = true
+						}
+					}
+				}
+				if !changed {
+					break
+				}
+			}
+			if total := o.fastCalcScore(); total > o.bestScore {
+				o.bestScore = total
+				o.bestSimState = cloneSimState(o.simState)
+				improved = true
+			}
+		}
+
+		tryPerm() // try initial perm (identity, will be skipped)
+		i := 0
+		for i < nc {
+			if c[i] < i {
+				if i%2 == 0 {
+					perm[0], perm[i] = perm[i], perm[0]
+				} else {
+					perm[c[i]], perm[i] = perm[i], perm[c[i]]
+				}
+				tryPerm()
+				c[i]++
+				i = 0
+			} else {
+				c[i] = 0
+				i++
+			}
+		}
+
+		if !improved {
+			o.bestScore = savedBest
+			o.bestSimState = savedBestState
+		}
+	}
+	return improved
+}
+
 func (o *Optimizer) runClimbing() {
 	for round := 0; round < o.cfg.MaxRounds; round++ {
 		o.setSimState(cloneSimState(o.bestSimState))
@@ -1418,6 +1520,11 @@ func (o *Optimizer) deepSearchSeed(seed SimState) (int, SimState) {
 	o.runClimbing()
 	if o.cfg.Verbose {
 		fmt.Fprintf(os.Stderr, "[verbose/deep] after climbing: %d\n", o.bestScore)
+	}
+
+	// within-guest chef permutation: try all seat arrangements, re-fill recipes
+	if o.climbChefPermutation() {
+		o.runClimbing()
 	}
 
 	// cross-guest (always attempt, no early exit)
