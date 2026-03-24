@@ -60,7 +60,7 @@
         '作坊': { materialType: '面', defaultCapacity: 26, capacityOptions: [26, 21, 16, 11, 5, 1] }
     };
     // 玉片区可选采集点档位。
-    var JADE_CAPACITY_OPTIONS = [165, 150, 135, 120, 105, 90, 75, 60, 45, 30, 15];
+    var JADE_CAPACITY_OPTIONS = [240, 225, 210, 195, 180, 165, 150, 135, 120, 105, 90, 75, 60, 45, 30, 15];
     // 人数配置统一档位。
     var DEFAULT_PEOPLE_OPTIONS = [5, 4, 3, 2, 1, 0];
     // 页面运行态：UI展开状态、区域开关、排序缓存、查询结果等。
@@ -646,12 +646,6 @@
         }
 
         items.forEach(function(item, index) {
-            var peopleOptions = DEFAULT_PEOPLE_OPTIONS.map(function(option) {
-                return '<option value="' + option + '"' + (item.people === option ? ' selected' : '') + '>' + option + '</option>';
-            }).join('');
-            var capacityOptions = item.meta.capacityOptions.map(function(option) {
-                return '<option value="' + option + '"' + (item.capacity === option ? ' selected' : '') + '>' + option + '</option>';
-            }).join('');
             html += [
                 '<div class="collection-sort-item collection-sort-item-', escapeHtml(item.prefix), '" draggable="true" data-id="', escapeHtml(item.id), '">',
                     '<div class="collection-sort-item-main">',
@@ -659,9 +653,17 @@
                         '<span class="collection-sort-name collection-sort-name-', escapeHtml(item.prefix), ' collection-sort-name-', escapeHtml(item.name), '">', escapeHtml(item.displayName), '</span>',
                         '<span class="collection-sort-divider">|</span>',
                         '<span class="collection-sort-label">人数</span>',
-                        '<select class="collection-sort-select collection-sort-people selectpicker monitor-none" data-id="', escapeHtml(item.id), '" data-width="60px" data-dropdown-align-right="auto">', peopleOptions, '</select>',
+                        '<button type="button" class="btn btn-default collection-sort-picker collection-sort-picker-people" data-id="', escapeHtml(item.id), '" data-kind="people" data-value="', escapeHtml(String(item.people)), '" data-options="', escapeHtml(DEFAULT_PEOPLE_OPTIONS.join(',')), '">',
+                            '<span class="collection-sort-picker-text">', escapeHtml(String(item.people)), '</span>',
+                            '<span class="caret"></span>',
+                        '</button>',
                         item.prefix !== 'lab' ? '<span class="collection-sort-label">采集点</span>' : '',
-                        item.prefix !== 'lab' ? '<select class="collection-sort-select collection-sort-capacity selectpicker monitor-none" data-id="' + escapeHtml(item.id) + '" data-width="70px" data-dropdown-align-right="auto">' + capacityOptions + '</select>' : '',
+                        item.prefix !== 'lab' ? [
+                            '<button type="button" class="btn btn-default collection-sort-picker collection-sort-picker-capacity" data-id="', escapeHtml(item.id), '" data-kind="capacity" data-value="', escapeHtml(String(item.capacity)), '" data-options="', escapeHtml(item.meta.capacityOptions.join(',')), '">',
+                                '<span class="collection-sort-picker-text">', escapeHtml(String(item.capacity)), '</span>',
+                                '<span class="caret"></span>',
+                            '</button>'
+                        ].join('') : '',
                     '</div>',
                     '<div class="collection-sort-item-actions">',
                         '<div class="collection-sort-move-group">',
@@ -758,20 +760,7 @@
 
     // 初始化排序弹窗里的下拉框样式（对齐菜单中菜谱星级 selectpicker 样式）。
     function initSortDialogSelectPickers($dialog) {
-        var $selects = $dialog.find('.collection-sort-select');
-        if (!$selects.length || typeof $selects.selectpicker !== 'function') {
-            return;
-        }
-        try {
-            $selects.selectpicker('destroy');
-        } catch (e) {}
-        $selects.selectpicker({
-            style: 'btn-default',
-            dropupAuto: false,
-            width: 'fit'
-        });
-        $selects.selectpicker('render');
-        $selects.selectpicker('refresh');
+        return;
     }
 
     // 打开排序弹窗，支持上下移动与拖拽重排。
@@ -780,6 +769,84 @@
         var items = cache.items.slice();
         var dragId = null;
         var currentDropTarget = null;
+        var activeMenuId = '';
+
+        function setSortCacheFromItems() {
+            state.sortCache = {
+                items: items.slice(),
+                savedAreaNames: (state.sortCache && state.sortCache.savedAreaNames ? state.sortCache.savedAreaNames.slice() : []),
+                noteText: state.sortCache ? state.sortCache.noteText : '',
+                listHtml: getSortListHtml(items)
+            };
+        }
+
+        function closeFloatingPicker() {
+            $('.collection-sort-floating-menu').remove();
+            activeMenuId = '';
+            dialog.find('.collection-sort-picker').removeClass('is-open');
+        }
+
+        function buildFloatingPickerHtml(kind, value, options) {
+            return [
+                '<div class="dropdown-menu collection-sort-floating-menu" data-kind="', escapeHtml(kind), '" style="display:block;">',
+                    options.map(function(option) {
+                        var optionText = String(option);
+                        var isSelected = String(option) === String(value);
+                        return [
+                            '<button type="button" class="collection-sort-floating-option', isSelected ? ' is-selected' : '', '" data-value="', escapeHtml(optionText), '">',
+                                escapeHtml(optionText),
+                            '</button>'
+                        ].join('');
+                    }).join(''),
+                '</div>'
+            ].join('');
+        }
+
+        function positionFloatingPicker($trigger, $menu) {
+            var offset = $trigger.offset();
+            var left = offset.left;
+            var top = offset.top + $trigger.outerHeight();
+            var minWidth = $trigger.outerWidth();
+            var viewportWidth = $(window).width();
+            var menuWidth;
+
+            $menu.css({
+                position: 'absolute',
+                left: left,
+                top: top,
+                minWidth: minWidth
+            });
+
+            menuWidth = $menu.outerWidth();
+            if (left + menuWidth > viewportWidth - 8) {
+                left = Math.max(8, viewportWidth - menuWidth - 8);
+                $menu.css('left', left);
+            }
+        }
+
+        function openFloatingPicker($trigger) {
+            var id = String($trigger.data('id'));
+            var kind = String($trigger.data('kind'));
+            var value = String($trigger.data('value'));
+            var options = String($trigger.attr('data-options') || '').split(',').filter(function(item) {
+                return item !== '';
+            });
+            var menuKey = id + '::' + kind;
+            var $menu;
+
+            if (activeMenuId === menuKey) {
+                closeFloatingPicker();
+                return;
+            }
+
+            closeFloatingPicker();
+            activeMenuId = menuKey;
+            $trigger.addClass('is-open');
+            $menu = $(buildFloatingPickerHtml(kind, value, options)).attr('data-id', id);
+            $('body').append($menu);
+            positionFloatingPicker($trigger, $menu);
+        }
+
         // 重置为当前可用区域的默认顺序。
         function resetSortItems() {
             items = getEnabledAreaItems(getSavedAreaNames());
@@ -805,9 +872,31 @@
         initSortDialogSelectPickers(dialog);
 
         function refreshSortDialogUi() {
+            closeFloatingPicker();
             renderSortList(dialog, items);
             initSortDialogSelectPickers(dialog);
         }
+
+        dialog.on('hidden.bs.modal', function() {
+            closeFloatingPicker();
+            $(document).off('.collectionSortPicker');
+            $(window).off('.collectionSortPicker');
+            dialog.find('.modal-body').off('.collectionSortPicker');
+        });
+
+        $(document).on('mousedown.collectionSortPicker', function(e) {
+            if (!$(e.target).closest('.collection-sort-picker, .collection-sort-floating-menu').length) {
+                closeFloatingPicker();
+            }
+        });
+
+        $(window).on('resize.collectionSortPicker', function() {
+            closeFloatingPicker();
+        });
+
+        dialog.find('.modal-body').on('scroll.collectionSortPicker', function() {
+            closeFloatingPicker();
+        });
 
         dialog.on('click', '[data-action="sort-reset-header"]', function() {
             resetSortItems();
@@ -819,52 +908,41 @@
             var fromIndex = getSortItemIndex(items, id);
             var toIndex = dir === 'up' ? fromIndex - 1 : fromIndex + 1;
             items = moveSortItem(items, fromIndex, toIndex);
-            state.sortCache = {
-                items: items.slice(),
-                savedAreaNames: (state.sortCache && state.sortCache.savedAreaNames ? state.sortCache.savedAreaNames.slice() : []),
-                noteText: state.sortCache ? state.sortCache.noteText : '',
-                listHtml: getSortListHtml(items)
-            };
+            setSortCacheFromItems();
             refreshSortDialogUi();
         });
 
-        dialog.on('change', '.collection-sort-people', function() {
-            var id = $(this).data('id');
-            var value = parseInt($(this).val(), 10);
+        dialog.on('click', '.collection-sort-picker', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            openFloatingPicker($(this));
+        });
+
+        $(document).on('click.collectionSortPicker', '.collection-sort-floating-option', function(e) {
+            var $option = $(this);
+            var $menu = $option.closest('.collection-sort-floating-menu');
+            var id = $menu.data('id');
+            var kind = $menu.data('kind');
+            var value = parseInt($option.data('value'), 10);
             var index = getSortItemIndex(items, id);
             if (index < 0) {
                 return;
             }
-            items = updateSortItem(items, id, { people: value });
-            saveStoredAreaPeople(items[index].prefix, items[index].name, value);
-            state.sortCache = {
-                items: items.slice(),
-                savedAreaNames: (state.sortCache && state.sortCache.savedAreaNames ? state.sortCache.savedAreaNames.slice() : []),
-                noteText: state.sortCache ? state.sortCache.noteText : '',
-                listHtml: getSortListHtml(items)
-            };
-            refreshSortDialogUi();
-        });
 
-        dialog.on('change', '.collection-sort-capacity', function() {
-            var id = $(this).data('id');
-            var value = parseInt($(this).val(), 10);
-            var index = getSortItemIndex(items, id);
-            if (index < 0) {
-                return;
+            if (kind === 'people') {
+                items = updateSortItem(items, id, { people: value });
+                saveStoredAreaPeople(items[index].prefix, items[index].name, value);
+            } else if (kind === 'capacity') {
+                items = updateSortItem(items, id, { capacity: value });
+                saveStoredAreaCapacity(items[index].prefix, items[index].name, value);
             }
-            items = updateSortItem(items, id, { capacity: value });
-            saveStoredAreaCapacity(items[index].prefix, items[index].name, value);
-            state.sortCache = {
-                items: items.slice(),
-                savedAreaNames: (state.sortCache && state.sortCache.savedAreaNames ? state.sortCache.savedAreaNames.slice() : []),
-                noteText: state.sortCache ? state.sortCache.noteText : '',
-                listHtml: getSortListHtml(items)
-            };
+
+            setSortCacheFromItems();
             refreshSortDialogUi();
         });
 
         dialog.on('dragstart', '.collection-sort-item', function(event) {
+            closeFloatingPicker();
             dragId = $(this).data('id');
             currentDropTarget = null;
             $(this).addClass('is-dragging');
@@ -877,6 +955,7 @@
         dialog.on('dragend', '.collection-sort-item', function() {
             dragId = null;
             currentDropTarget = null;
+            closeFloatingPicker();
             dialog.find('.collection-sort-item').removeClass('is-dragging is-drop-target');
         });
 
@@ -903,12 +982,7 @@
             fromIndex = getSortItemIndex(items, dragId);
             toIndex = getSortItemIndex(items, targetId);
             items = moveSortItem(items, fromIndex, toIndex);
-            state.sortCache = {
-                items: items.slice(),
-                savedAreaNames: (state.sortCache && state.sortCache.savedAreaNames ? state.sortCache.savedAreaNames.slice() : []),
-                noteText: state.sortCache ? state.sortCache.noteText : '',
-                listHtml: getSortListHtml(items)
-            };
+            setSortCacheFromItems();
             refreshSortDialogUi();
         });
     }
@@ -2234,7 +2308,7 @@
 
         // 验证是否是光环厨师
         var isAuraChef = (combinedDesc.indexOf('场上所有厨师') >= 0 || combinedDesc.indexOf('下位上场厨师') >= 0) &&
-                        (!combinedDesc.indexOf('售价') >= 0 || hasSkillBonus) &&
+                        (combinedDesc.indexOf('售价') < 0 || hasSkillBonus) &&
                         combinedDesc.indexOf('采集') < 0 &&
                         combinedDesc.indexOf('菜') < 0 &&
                         combinedDesc.indexOf('鱼') < 0 &&
@@ -2443,6 +2517,16 @@
             baseCreationVal: 0,
             isEmpty: true
         };
+    }
+
+    // 汇总区域内所有已分配厨师的采集期望值，忽略空位。
+    function getAreaTotalCollectionExpectation(chefs) {
+        return Number((chefs || []).reduce(function(total, chef) {
+            if (isEmptyCollectionChef(chef)) {
+                return total;
+            }
+            return total + Number(chef.collectionExpectation || 0);
+        }, 0).toFixed(2));
     }
 
     // 将候选厨师指标封装为查询结果项结构。
@@ -2919,6 +3003,9 @@
             summaryHtml.push('<span class="collection-result-summary-pill">总技法 ' + result.totalValue + '</span>');
         } else {
             summaryHtml.push('<span class="collection-result-summary-pill">采集点 ' + result.totalValue + '/' + result.capacity + '</span>');
+            if (result.prefix === 'veg') {
+                summaryHtml.push('<span class="collection-result-summary-pill">总期望值 ' + getAreaTotalCollectionExpectation(result.chefs) + '</span>');
+            }
         }
         if (result.insufficient) {
             summaryHtml.push('<span class="collection-result-summary-pill is-warning">未达标</span>');
