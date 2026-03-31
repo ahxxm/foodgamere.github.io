@@ -48,6 +48,61 @@
         lab: '实验室',
         cond: '调料区'
     };
+    var COLLECTION_DATA_QUERY_TABS = [
+        { key: 'lab', label: '实验室' }
+    ];
+    var COLLECTION_LAB_RESEARCH_VALUE_TABLE = {
+        title: '研发保底技法值与必定成功技法值',
+        note: '数 据 由 梨 大 只 提 供 ~ ~',
+        headers: [
+            ['保底技法值', '类型', '一定成功', '基本稳了', '希望很大', '好像很稳', '勉强及格', '成功过半', '四成可能', '十分微妙', '较低可能', '不大可能'],
+            ['累计必定成功', '', '100%', '90%', '80%', '70%', '60%', '50%', '40%', '30%', '20%', '10%']
+        ],
+        rows: [
+            {
+                reserveValue: '25000',
+                type: '五火菜',
+                values: ['12500', '11250', '10000', '8750', '7500', '6250', '5000', '3750', '2500', '1250'],
+                potCounts: ['', '3锅', '3锅', '3锅', '4锅', '4锅', '5锅', '7锅', '10锅', '20锅']
+            },
+            {
+                reserveValue: '28000',
+                type: '部分五火菜',
+                values: ['', '', '', '', '', '', '', '', '', ''],
+                potCounts: ['', '3锅', '3锅', '4锅', '4锅', '5锅', '6锅', '8锅', '12锅', '23锅']
+            },
+            {
+                reserveValue: '13333',
+                type: '四火菜',
+                values: ['6666', '5999.4', '5332.8', '4666.2', '3999.6', '3333', '2666.4', '1999.8', '1333.2', '666.6'],
+                potCounts: ['', '3锅', '3锅', '3锅', '4锅', '5锅', '6锅', '7锅', '11锅', '21锅']
+            },
+            {
+                reserveValue: '10000',
+                type: '三火菜',
+                values: ['5000', '4500', '4000', '3500', '3000', '2500', '2000', '1500', '1000', '500'],
+                potCounts: ['', '3锅', '3锅', '3锅', '4锅', '4锅', '5锅', '7锅', '10锅', '20锅']
+            },
+            {
+                reserveValue: '7500',
+                type: '二火菜',
+                values: ['3500', '3150', '2800', '2450', '2100', '1750', '1400', '1050', '700', '350'],
+                potCounts: ['', '3锅', '3锅', '4锅', '4锅', '5锅', '6锅', '8锅', '11锅', '22锅']
+            },
+            {
+                reserveValue: '2500',
+                type: '一火菜',
+                values: ['2500', '2250', '2000', '1750', '1500', '1250', '1000', '750', '500', '250'],
+                potCounts: ['', '2锅', '2锅', '2锅', '2锅', '2锅', '3锅', '4锅', '5锅', '10锅']
+            },
+            {
+                reserveValue: '20000',
+                type: '三火厨具',
+                values: ['10000', '9000', '8000', '7000', '6000', '5000', '4000', '3000', '2000', '1000'],
+                potCounts: ['', '3锅', '3锅', '3锅', '4锅', '4锅', '5锅', '7锅', '10锅', '20锅']
+            }
+        ]
+    };
     // 菜地区每个地点的基础配置：素材类型、默认采集点、可选采集点档位。
     var VEG_AREA_META = {
         '池塘': { materialType: '鱼', defaultCapacity: 29, capacityOptions: [29, 24, 19, 14, 9, 5] },
@@ -4324,6 +4379,7 @@
         var hasRareGuestSkill = false;
         var hasOpeningTimeSkill = false;
         var hasChefOpeningTimeSkill = false;
+        var chefOpeningTimeMinValue = null;
         var hasChefGuestAppearRateSkill = false;
         var activeSelfUltimateEffects = getActiveSelfUltimateEffectsForCollection(chef);
         var activeUltimateDesc = activeSelfUltimateEffects.length > 0 ? String(chef.ultimateSkillDisp || '') : '';
@@ -4389,6 +4445,13 @@
         function scanEffects(effects, sourceDesc, options) {
             var isCritSource = isCritMaterialSkillDesc(sourceDesc);
             var isChefSkillSource = !!(options && options.isChefSkillSource);
+
+            function collectOpenTimeValue(effectValue) {
+                if (chefOpeningTimeMinValue === null || effectValue < chefOpeningTimeMinValue) {
+                    chefOpeningTimeMinValue = effectValue;
+                }
+            }
+
             (effects || []).forEach(function(effect) {
                 var effectType;
                 var effectValue;
@@ -4417,10 +4480,11 @@
                     if (isChefSkillSource) {
                         hasChefGuestAppearRateSkill = true;
                     }
-                } else if (effectType === 'OpenTime' || effectType === 'CookbookTime') {
+                } else if (effectType === 'OpenTime') {
                     hasOpeningTimeSkill = true;
                     if (isChefSkillSource) {
                         hasChefOpeningTimeSkill = true;
+                        collectOpenTimeValue(effectValue);
                     }
                 }
             });
@@ -4429,14 +4493,19 @@
         function scanChefIdentityEffects(effects) {
             (effects || []).forEach(function(effect) {
                 var effectType;
+                var effectValue;
                 if (!effect) {
                     return;
                 }
                 effectType = String(effect.type || '');
+                effectValue = toInt(effect.value, 0);
                 if (effectType === 'GuestApearRate') {
                     hasChefGuestAppearRateSkill = true;
-                } else if (effectType === 'OpenTime' || effectType === 'CookbookTime') {
+                } else if (effectType === 'OpenTime') {
                     hasChefOpeningTimeSkill = true;
+                    if (chefOpeningTimeMinValue === null || effectValue < chefOpeningTimeMinValue) {
+                        chefOpeningTimeMinValue = effectValue;
+                    }
                 }
             });
         }
@@ -4541,6 +4610,7 @@
             hasRareGuestSkill: hasRareGuestSkill,
             hasOpeningTimeSkill: hasOpeningTimeSkill,
             hasChefOpeningTimeSkill: hasChefOpeningTimeSkill,
+            chefOpeningTimeMinValue: chefOpeningTimeMinValue,
             hasChefGuestAppearRateSkill: hasChefGuestAppearRateSkill,
             redAmberCount: chef.disk && Array.isArray(chef.disk.ambers) ? chef.disk.ambers.filter(function(slot) {
                 return slot && slot.type === 1 && slot.data;
@@ -4577,7 +4647,7 @@
         var settings = commonFilterSettings || getCollectionCommonFilterSettings();
         var targetMeta = meta || {};
 
-        if (settings.excludeAssassinChef && targetMeta.hasChefOpeningTimeSkill) {
+        if (settings.excludeAssassinChef && Number(targetMeta.chefOpeningTimeMinValue || 0) <= -10) {
             return true;
         }
         if (settings.excludeGuestChef && targetMeta.hasChefGuestAppearRateSkill) {
@@ -5792,9 +5862,78 @@
     }
 
     // 菜地区查询：
-    // 按采集期望优先选人；若总采集点不足，尝试用低期望高采集值厨师兜底替换。
+    // 先按采集期望优先选人；若最终采集点不足，再做末尾淘汰替换：
+    // 在达到采集点要求的前提下，优先保留更高总期望值；仅在期望值接近时再偏向少超标。
     function executeVegAreaQuery(areaItem, availableChefs, chefPoolData) {
         var commonFilterSettings = getCollectionCommonFilterSettings();
+        var totalValue = 0;
+        var selectionResult = null;
+        var VEG_REPLACEMENT_OVERFLOW_TOLERANCE = 3;
+
+        function getVegChefKey(chef) {
+            return String(chef && (chef.chefId || chef.id || chef.name) || '');
+        }
+
+        function evaluateVegSelection(selectedCandidates) {
+            var result = applyAreaTeamCollectionBonus(selectedCandidates.map(function(item) {
+                return buildSelectedCollectionChef(item, areaItem);
+            }), areaItem, chefPoolData.context);
+
+            result.totalExpectation = getAreaTotalCollectionExpectation(result.selected);
+            return result;
+        }
+
+        function compareVegReplacementPlan(left, right) {
+            var leftReach = left.totalValue >= areaItem.capacity;
+            var rightReach = right.totalValue >= areaItem.capacity;
+            var leftOverflow = left.overflow || 0;
+            var rightOverflow = right.overflow || 0;
+            var overflowGap = Math.abs(leftOverflow - rightOverflow);
+
+            if (leftReach !== rightReach) {
+                return leftReach ? -1 : 1;
+            }
+
+            if (leftReach && rightReach) {
+                if (right.totalExpectation !== left.totalExpectation) {
+                    if (overflowGap <= VEG_REPLACEMENT_OVERFLOW_TOLERANCE) {
+                        return right.totalExpectation - left.totalExpectation;
+                    }
+                    if (leftOverflow !== rightOverflow) {
+                        return leftOverflow - rightOverflow;
+                    }
+                    return right.totalExpectation - left.totalExpectation;
+                }
+                if (leftOverflow !== rightOverflow) {
+                    return leftOverflow - rightOverflow;
+                }
+                if (left.removeRank !== right.removeRank) {
+                    return left.removeRank - right.removeRank;
+                }
+                if ((right.replacement.expectation || 0) !== (left.replacement.expectation || 0)) {
+                    return (right.replacement.expectation || 0) - (left.replacement.expectation || 0);
+                }
+                if (left.totalValue !== right.totalValue) {
+                    return left.totalValue - right.totalValue;
+                }
+                return (right.replacement.rawValue || 0) - (left.replacement.rawValue || 0);
+            }
+
+            if (right.totalValue !== left.totalValue) {
+                return right.totalValue - left.totalValue;
+            }
+            if (right.totalExpectation !== left.totalExpectation) {
+                return right.totalExpectation - left.totalExpectation;
+            }
+            if (left.removeRank !== right.removeRank) {
+                return left.removeRank - right.removeRank;
+            }
+            if ((right.replacement.expectation || 0) !== (left.replacement.expectation || 0)) {
+                return (right.replacement.expectation || 0) - (left.replacement.expectation || 0);
+            }
+            return (right.replacement.rawValue || 0) - (left.replacement.rawValue || 0);
+        }
+
         var allCandidates = sortVegCandidates(availableChefs.map(function(chef) {
             // 克隆厨师对象，避免影响其他区域的查询
             var clonedChef = cloneData(chef);
@@ -5830,66 +5969,73 @@
             return item.rawValue > 0 && !item.meta.hasRareGuestSkill && !isCollectionChefExcludedByCommonConfig(item.meta, commonFilterSettings);
         }));
         var selected = allCandidates.slice(0, areaItem.people);
-        var totalValue = selected.reduce(function(total, item) {
-            return total + item.rawValue;
-        }, 0);
+        selectionResult = evaluateVegSelection(selected);
+        totalValue = selectionResult.totalValue;
 
         if (totalValue < areaItem.capacity && allCandidates.length > selected.length) {
-            var protectedIds = selected.slice().sort(function(left, right) {
-                return right.expectation - left.expectation;
-            }).slice(0, 2).map(function(item) {
-                return String(item.chef.chefId || item.chef.id || item.chef.name);
-            });
-            var remainingCandidates = allCandidates.filter(function(item) {
-                var id = String(item.chef.chefId || item.chef.id || item.chef.name);
-                return !selected.some(function(selectedItem) {
-                    return String(selectedItem.chef.chefId || selectedItem.chef.id || selectedItem.chef.name) === id;
+            while (totalValue < areaItem.capacity) {
+                var selectedIdMap = {};
+                var remainingCandidates = null;
+                var removableCandidates = null;
+                var bestPlan = null;
+
+                selected.forEach(function(item) {
+                    selectedIdMap[getVegChefKey(item.chef)] = true;
                 });
-            });
+                remainingCandidates = allCandidates.filter(function(item) {
+                    return !selectedIdMap[getVegChefKey(item.chef)];
+                });
 
-            selected.slice().sort(function(left, right) {
-                return left.expectation - right.expectation;
-            }).some(function(candidateChef) {
-                var candidateChefId = String(candidateChef.chef.chefId || candidateChef.chef.id || candidateChef.chef.name);
-                var currentValue = candidateChef.rawValue;
-                var neededGap;
-                var replacement;
-
-                if (protectedIds.indexOf(candidateChefId) >= 0) {
-                    return false;
+                if (!remainingCandidates.length) {
+                    break;
                 }
 
-                neededGap = areaItem.capacity - (totalValue - currentValue);
-                replacement = remainingCandidates.filter(function(item) {
-                    return item.rawValue >= neededGap && getChefTopTwoCollectionSum(item.chef) <= 25;
-                }).sort(function(left, right) {
-                    if (right.expectation !== left.expectation) {
-                        return right.expectation - left.expectation;
+                removableCandidates = selected.slice().sort(function(left, right) {
+                    if (left.expectation !== right.expectation) {
+                        return left.expectation - right.expectation;
                     }
-                    return right.rawValue - left.rawValue;
-                })[0];
+                    if (left.rawValue !== right.rawValue) {
+                        return left.rawValue - right.rawValue;
+                    }
+                    return toInt(left.chef.rarity, 0) - toInt(right.chef.rarity, 0);
+                });
 
-                if (!replacement) {
-                    return false;
+                removableCandidates.forEach(function(removeItem, removeRank) {
+                    var removeChefId = getVegChefKey(removeItem.chef);
+
+                    remainingCandidates.forEach(function(replacement) {
+                        var trialSelected = selected.map(function(currentItem) {
+                            return getVegChefKey(currentItem.chef) === removeChefId ? replacement : currentItem;
+                        });
+                        var trialResult = evaluateVegSelection(trialSelected);
+                        var currentPlan = {
+                            removeRank: removeRank,
+                            removed: removeItem,
+                            replacement: replacement,
+                            selected: trialSelected,
+                            result: trialResult,
+                            totalValue: trialResult.totalValue,
+                            totalExpectation: trialResult.totalExpectation,
+                            overflow: Math.max(0, trialResult.totalValue - areaItem.capacity)
+                        };
+
+                        if (!bestPlan || compareVegReplacementPlan(currentPlan, bestPlan) < 0) {
+                            bestPlan = currentPlan;
+                        }
+                    });
+                });
+
+                if (!bestPlan || bestPlan.totalValue <= totalValue) {
+                    break;
                 }
 
-                selected = selected.filter(function(item) {
-                    return String(item.chef.chefId || item.chef.id || item.chef.name) !== candidateChefId;
-                });
-                selected.push(replacement);
-                remainingCandidates = remainingCandidates.filter(function(item) {
-                    return String(item.chef.chefId || item.chef.id || item.chef.name) !== String(replacement.chef.chefId || replacement.chef.id || replacement.chef.name);
-                }).concat([candidateChef]);
-                totalValue = selected.reduce(function(total, item) {
-                    return total + item.rawValue;
-                }, 0);
-                return totalValue >= areaItem.capacity;
-            });
+                selected = bestPlan.selected;
+                selectionResult = bestPlan.result;
+                totalValue = bestPlan.totalValue;
+            }
         }
 
-        return applyAreaTeamCollectionBonus(selected.map(function(item) {
-            return buildSelectedCollectionChef(item, areaItem);
-        }), areaItem, chefPoolData.context);
+        return selectionResult || evaluateVegSelection(selected);
     }
 
     // 根据地区名确定结果卡片里的采集维度高亮。
@@ -6502,6 +6648,9 @@
                     '<div class="collection-panel-header">',
                         '<span class="collection-panel-title">查询设置</span>',
                         '<div class="collection-panel-actions">',
+                            '<button type="button" class="btn btn-sm btn-default collection-config-btn" data-action="open-data-query" title="查询研发数据">',
+                                '<span class="glyphicon glyphicon-stats"></span> 数据查询',
+                            '</button>',
                             '<button type="button" class="btn btn-sm btn-default collection-config-btn" data-action="open-config" title="配置区域">',
                                 '<span class="glyphicon glyphicon-cog"></span> 配置',
                             '</button>',
@@ -6952,100 +7101,32 @@
             return currentAreaChefNames.indexOf(chef.name) === -1;
         });
 
-        // 根据区域类型计算候选厨师的技法值
+        // 显示替换对话框；候选指标改为分页按需计算，避免一次性全量重算卡顿。
+        showReplaceChefDialogUI(currentArea, currentChefName, candidateChefs, chefPoolData, assignedMap);
+    }
+
+    // 渲染替换弹窗UI。
+    // 菜地区会展示四维采集点和素材三指标（素材/暴击素材/暴击率）。
+    function showReplaceChefDialogUI(currentArea, currentChefName, rawCandidateChefs, chefPoolData, assignedMap) {
+        var highlightKey = getCollectionHighlightKeyByAreaName(currentArea.areaName);
+        var displayCandidates = [];
+        var candidateSourceChefs = Array.isArray(rawCandidateChefs) ? rawCandidateChefs : [];
+        var condTabBaseId = 'replace-chef-cond-' + Date.now();
+        var replaceSearchInputId = 'replace-chef-search-' + Date.now();
+        var replaceSlotFilterId = 'replace-chef-slot-filter-' + Date.now();
+        var replaceSlotMatchId = 'replace-chef-slot-match-' + Date.now();
+        var replacePageHintId = 'replace-chef-page-hint-' + Date.now();
+        var PAGE_SIZE = 20;
         var areaItem = {
             name: currentArea.areaName,
             prefix: currentArea.prefix,
             people: currentArea.people,
             capacity: currentArea.capacity
         };
-
-        var candidates = candidateChefs.map(function(chef) {
-            var clonedChef = cloneData(chef);
-
-            // 应用厨具配置
-            if (areaItem.prefix === 'lab') {
-                applyLabEquipIfNeeded(clonedChef, chefPoolData.context, areaItem.name);
-            } else if (areaItem.prefix === 'jade') {
-                applyPreferredCollectionEquipIfNeeded(clonedChef, chefPoolData, 'jade', areaItem.name);
-            } else if (areaItem.prefix === 'veg') {
-                applyPreferredCollectionEquipIfNeeded(clonedChef, chefPoolData, 'veg', areaItem.name);
-            } else if (areaItem.prefix === 'cond') {
-                applyCondEquipIfNeeded(clonedChef, chefPoolData.context, areaItem.name);
-            }
-
-            recalculateChefData(clonedChef, chefPoolData);
-            if (areaItem.prefix === 'lab') {
-                autoApplyLabRedAmberIfNeeded(clonedChef, chefPoolData, areaItem.name);
-            } else if (areaItem.prefix === 'jade') {
-                autoApplyAreaGreenAmberIfNeeded(clonedChef, chefPoolData, areaItem.name, 'jade');
-            } else if (areaItem.prefix === 'veg') {
-                autoApplyAreaGreenAmberIfNeeded(clonedChef, chefPoolData, areaItem.name, 'veg');
-            } else if (areaItem.prefix === 'cond') {
-                autoApplyCondAmberIfNeeded(clonedChef, chefPoolData, areaItem.name);
-            }
-            clonedChef.__queryAreaName = areaItem.name;
-            clonedChef.__queryMeta = getChefMaterialSkillMeta(clonedChef);
-            clonedChef.materialExpectation = typeof window.calculateMaterialExpectation === 'function'
-                ? window.calculateMaterialExpectation(clonedChef, clonedChef.equip || null, clonedChef.disk || {})
-                : 0;
-
-            var metric = getAreaQueryMetric(areaItem, clonedChef);
-            var assignedArea = assignedMap[String(clonedChef.name || '')] || '';
-
-            // 如果是实验室区域，检查光环
-            if (areaItem.prefix === 'lab') {
-                var auraInfo = checkAuraChef(clonedChef, areaItem.name, chefPoolData.context);
-                var totalContribution = metric.rawValue;
-
-                if (auraInfo.isAura && (auraInfo.auraType === areaItem.name || auraInfo.auraType === '全技法')) {
-                    var auraMultiplier = auraInfo.auraScope === '场上所有厨师' ? areaItem.people : 1;
-                    var totalAuraBonus = auraInfo.auraBonus * auraMultiplier;
-                    totalContribution = metric.rawValue + totalAuraBonus;
-                    metric.detailText += '（光环：' + auraInfo.auraType + '+' + auraInfo.auraBonus + ' X' + auraMultiplier + ' = ' + totalAuraBonus + '）';
-                }
-
-                return {
-                    chef: clonedChef,
-                    metric: metric,
-                    totalContribution: totalContribution,
-                    auraInfo: auraInfo,
-                    assignedArea: assignedArea,
-                    isAssignedOtherArea: assignedArea && assignedArea !== currentArea.areaName
-                };
-            }
-
-            return {
-                chef: clonedChef,
-                metric: metric,
-                assignedArea: assignedArea,
-                isAssignedOtherArea: assignedArea && assignedArea !== currentArea.areaName
-            };
-        }).filter(function(item) {
-            return item.metric.rawValue > 0;
-        }).sort(function(left, right) {
-            if (areaItem.prefix === 'lab') {
-                return (right.totalContribution || right.metric.rawValue) - (left.totalContribution || left.metric.rawValue);
-            }
-            return right.metric.score - left.metric.score;
-        });
-
-        // 显示替换对话框
-        showReplaceChefDialogUI(currentArea, currentChefName, candidates);
-    }
-
-    // 渲染替换弹窗UI。
-    // 菜地区会展示四维采集点和素材三指标（素材/暴击素材/暴击率）。
-    function showReplaceChefDialogUI(currentArea, currentChefName, candidates) {
-        var highlightKey = getCollectionHighlightKeyByAreaName(currentArea.areaName);
-        var displayCandidates = Array.isArray(candidates) ? candidates : [];
-        var condTabBaseId = 'replace-chef-cond-' + Date.now();
-        var replaceSearchInputId = 'replace-chef-search-' + Date.now();
-        var replaceSlotFilterId = 'replace-chef-slot-filter-' + Date.now();
-        var replaceSlotMatchId = 'replace-chef-slot-match-' + Date.now();
-        var currentChefItem = currentChefName ? (currentArea.chefs || []).find(function(chef) {
-            return !isEmptyCollectionChef(chef) && chef.name === currentChefName;
-        }) : null;
+        var activeCondTab = 'value';
+        var filteredSourceChefs = [];
+        var currentPageIndex = 0;
+        var cachedCandidateMap = {};
 
         function getReplaceChefEquipText(chef) {
             if (!chef) {
@@ -7100,6 +7181,110 @@
             };
         }
 
+        function getReplaceCandidateChefKey(chef) {
+            return String(chef && (chef.chefId || chef.id || chef.name) || '');
+        }
+
+        function getReplaceSourceChefItem(sourceChef) {
+            var chefKey = getReplaceCandidateChefKey(sourceChef);
+            var clonedChef;
+            var metric;
+            var assignedArea;
+            var auraInfo;
+            var totalContribution;
+
+            if (!chefKey) {
+                return null;
+            }
+            if (cachedCandidateMap.hasOwnProperty(chefKey)) {
+                return cachedCandidateMap[chefKey];
+            }
+
+            clonedChef = cloneData(sourceChef);
+
+            if (areaItem.prefix === 'lab') {
+                applyLabEquipIfNeeded(clonedChef, chefPoolData.context, areaItem.name);
+            } else if (areaItem.prefix === 'jade') {
+                applyPreferredCollectionEquipIfNeeded(clonedChef, chefPoolData, 'jade', areaItem.name);
+            } else if (areaItem.prefix === 'veg') {
+                applyPreferredCollectionEquipIfNeeded(clonedChef, chefPoolData, 'veg', areaItem.name);
+            } else if (areaItem.prefix === 'cond') {
+                applyCondEquipIfNeeded(clonedChef, chefPoolData.context, areaItem.name);
+            }
+
+            recalculateChefData(clonedChef, chefPoolData);
+            if (areaItem.prefix === 'lab') {
+                autoApplyLabRedAmberIfNeeded(clonedChef, chefPoolData, areaItem.name);
+            } else if (areaItem.prefix === 'jade') {
+                autoApplyAreaGreenAmberIfNeeded(clonedChef, chefPoolData, areaItem.name, 'jade');
+            } else if (areaItem.prefix === 'veg') {
+                autoApplyAreaGreenAmberIfNeeded(clonedChef, chefPoolData, areaItem.name, 'veg');
+            } else if (areaItem.prefix === 'cond') {
+                autoApplyCondAmberIfNeeded(clonedChef, chefPoolData, areaItem.name);
+            }
+
+            clonedChef.__queryAreaName = areaItem.name;
+            clonedChef.__queryMeta = getChefMaterialSkillMeta(clonedChef);
+            clonedChef.materialExpectation = typeof window.calculateMaterialExpectation === 'function'
+                ? window.calculateMaterialExpectation(clonedChef, clonedChef.equip || null, clonedChef.disk || {})
+                : 0;
+
+            metric = getAreaQueryMetric(areaItem, clonedChef);
+            if (!metric) {
+                cachedCandidateMap[chefKey] = null;
+                return null;
+            }
+            if (areaItem.prefix !== 'veg' && areaItem.prefix !== 'jade' && !(metric.rawValue > 0)) {
+                cachedCandidateMap[chefKey] = null;
+                return null;
+            }
+
+            assignedArea = assignedMap[String(clonedChef.name || '')] || '';
+            if (areaItem.prefix === 'lab') {
+                auraInfo = checkAuraChef(clonedChef, areaItem.name, chefPoolData.context);
+                totalContribution = metric.rawValue;
+                if (auraInfo.isAura && (auraInfo.auraType === areaItem.name || auraInfo.auraType === '全技法')) {
+                    var auraMultiplier = auraInfo.auraScope === '场上所有厨师' ? areaItem.people : 1;
+                    var totalAuraBonus = auraInfo.auraBonus * auraMultiplier;
+                    totalContribution = metric.rawValue + totalAuraBonus;
+                    metric.detailText += '（光环：' + auraInfo.auraType + '+' + auraInfo.auraBonus + ' X' + auraMultiplier + ' = ' + totalAuraBonus + '）';
+                }
+                cachedCandidateMap[chefKey] = {
+                    chef: clonedChef,
+                    metric: metric,
+                    totalContribution: totalContribution,
+                    auraInfo: auraInfo,
+                    assignedArea: assignedArea,
+                    isAssignedOtherArea: assignedArea && assignedArea !== currentArea.areaName
+                };
+                return cachedCandidateMap[chefKey];
+            }
+
+            cachedCandidateMap[chefKey] = {
+                chef: clonedChef,
+                metric: metric,
+                assignedArea: assignedArea,
+                isAssignedOtherArea: assignedArea && assignedArea !== currentArea.areaName
+            };
+            return cachedCandidateMap[chefKey];
+        }
+
+        function formatReplaceChefExpectation(item) {
+            return Number(item && item.metric ? item.metric.expectation || 0 : 0).toFixed(2).replace(/\.00$/, '');
+        }
+
+        function shouldHideZeroValueReplaceChef(item, searchQuery) {
+            var keyword = $.trim(String(searchQuery || ''));
+
+            if (areaItem.prefix !== 'veg' && areaItem.prefix !== 'jade') {
+                return false;
+            }
+            if (keyword) {
+                return false;
+            }
+            return !item || !item.metric || toInt(item.metric.rawValue, 0) <= 0;
+        }
+
         function buildReplaceChefSecondRowHtml(item, displayMode) {
             var chef = item && item.chef ? item.chef : {};
             var amberMeta = getReplaceChefAmberMeta(chef);
@@ -7130,15 +7315,10 @@
                 }));
             } else if (currentArea.prefix === 'jade') {
                 chips.push('<span class="replace-chef-item-value-chip is-highlight">' + escapeHtml(metric.label) + ' ' + metric.rawValue + '</span>');
-                chips.push('<span class="replace-chef-item-value-chip is-expectation">采集期望值 ' + Number(metric.expectation || 0).toFixed(2).replace(/\.00$/, '') + '</span>');
             } else if (currentArea.prefix === 'cond') {
                 var flavorLabel = chef.targetCondimentFlavorLabel || currentArea.targetFlavorLabel || '';
                 var valueText = flavorLabel ? (flavorLabel + '：' + metric.rawValue) : ('调料值：' + metric.rawValue);
-                if (displayMode === 'expectation') {
-                    chips.push('<span class="replace-chef-item-value-chip is-expectation">采集期望值 ' + Number(metric.expectation || 0).toFixed(2).replace(/\.00$/, '') + '</span>');
-                } else {
-                    chips.push('<span class="replace-chef-item-value-chip is-highlight">' + escapeHtml(valueText) + '</span>');
-                }
+                chips.push('<span class="replace-chef-item-value-chip is-highlight">' + escapeHtml(valueText) + '</span>');
             }
 
             chips.push('<span class="replace-chef-item-meta-chip is-equip">' + escapeHtml(getReplaceChefEquipText(chef)) + '</span>');
@@ -7162,6 +7342,9 @@
             }
 
             headExtraHtml = '<span class="replace-chef-item-inline-tag ' + getReplaceChefAmberMeta(chef).chipClass + '">' + getReplaceChefAmberMeta(chef).countLabel + getReplaceChefAmberMeta(chef).count + '</span>';
+            if (currentArea.prefix === 'veg' || currentArea.prefix === 'jade' || currentArea.prefix === 'cond') {
+                headExtraHtml += '<span class="replace-chef-item-inline-tag is-expectation">采集期望值 ' + formatReplaceChefExpectation(item) + '</span>';
+            }
             secondRowHtml = buildReplaceChefSecondRowHtml(item, displayMode);
 
             if (currentArea.prefix === 'veg' || currentArea.prefix === 'jade' || currentArea.prefix === 'cond') {
@@ -7216,14 +7399,14 @@
             return [
                 '<div class="replace-chef-tabs">',
                     '<ul class="nav nav-tabs replace-chef-tab-nav" role="tablist">',
-                        '<li class="active"><a href="#', condTabBaseId, '-value" data-toggle="tab">调料值</a></li>',
-                        '<li><a href="#', condTabBaseId, '-expectation" data-toggle="tab">采集期望值</a></li>',
+                        '<li', activeCondTab === 'value' ? ' class="active"' : '', '><a href="#', condTabBaseId, '-value" data-toggle="tab">调料值</a></li>',
+                        '<li', activeCondTab === 'expectation' ? ' class="active"' : '', '><a href="#', condTabBaseId, '-expectation" data-toggle="tab">采集期望值</a></li>',
                     '</ul>',
                     '<div class="tab-content replace-chef-tab-content">',
-                        '<div class="tab-pane active" id="', condTabBaseId, '-value">',
+                        '<div class="tab-pane', activeCondTab === 'value' ? ' active' : '', '" id="', condTabBaseId, '-value">',
                             renderReplaceChefList(byValue, 'value'),
                         '</div>',
-                        '<div class="tab-pane" id="', condTabBaseId, '-expectation">',
+                        '<div class="tab-pane', activeCondTab === 'expectation' ? ' active' : '', '" id="', condTabBaseId, '-expectation">',
                             renderReplaceChefList(byExpectation, 'expectation'),
                         '</div>',
                     '</div>',
@@ -7279,71 +7462,200 @@
             return toInt(slotCounts[colorKey], 0) === expectedCount;
         }
 
-        function filterReplaceChefCandidates(slotFilterValues, mustMatchAll) {
+        function filterReplaceChefSourceChefs(slotFilterValues, mustMatchAll, searchQuery) {
             var normalizedValues = normalizeReplaceSlotFilterValues(slotFilterValues);
             var requireAll = !!mustMatchAll;
-
-            if (!normalizedValues.length) {
-                return displayCandidates.slice();
-            }
-
-            return displayCandidates.filter(function(item) {
-                return requireAll
-                    ? normalizedValues.every(function(slotRuleValue) {
-                        return isReplaceChefMatchedBySlotRule(item.chef, slotRuleValue);
-                    })
-                    : normalizedValues.some(function(slotRuleValue) {
-                        return isReplaceChefMatchedBySlotRule(item.chef, slotRuleValue);
-                    });
-            });
-        }
-
-        function isReplaceChefMatchedBySearch(chef, query) {
-            var keyword = $.trim(String(query || ''));
+            var keyword = $.trim(String(searchQuery || ''));
             var matcher = typeof window.commaSeparatedMatch === 'function' ? window.commaSeparatedMatch : null;
 
-            if (!keyword) {
+            return candidateSourceChefs.filter(function(chef) {
+                var matchedBySlot = !normalizedValues.length || (requireAll
+                    ? normalizedValues.every(function(slotRuleValue) {
+                        return isReplaceChefMatchedBySlotRule(chef, slotRuleValue);
+                    })
+                    : normalizedValues.some(function(slotRuleValue) {
+                        return isReplaceChefMatchedBySlotRule(chef, slotRuleValue);
+                    }));
+                var matchedBySearch;
+                var candidateItem;
+
+                if (!matchedBySlot) {
+                    return false;
+                }
+                if (matcher) {
+                    matchedBySearch = !!matcher(chef && chef.name, keyword)
+                        || !!matcher(chef && chef.specialSkillDisp, keyword)
+                        || !!matcher(chef && chef.origin, keyword)
+                        || !!matcher(chef && chef.ultimateSkillDisp, keyword)
+                        || !!matcher(chef && chef.tagsDisp, keyword);
+                } else {
+                    matchedBySearch = [
+                        chef && chef.name,
+                        chef && chef.specialSkillDisp,
+                        chef && chef.origin,
+                        chef && chef.ultimateSkillDisp,
+                        chef && chef.tagsDisp
+                    ].some(function(field) {
+                        return String(field || '').toLowerCase().indexOf(keyword.toLowerCase()) >= 0;
+                    });
+                }
+
+                if (keyword && !matchedBySearch) {
+                    return false;
+                }
+
+                candidateItem = getReplaceSourceChefItem(chef);
+                if (!candidateItem) {
+                    return false;
+                }
+                if (shouldHideZeroValueReplaceChef(candidateItem, keyword)) {
+                    return false;
+                }
                 return true;
-            }
-
-            if (matcher) {
-                return !!matcher(chef && chef.name, keyword)
-                    || !!matcher(chef && chef.specialSkillDisp, keyword)
-                    || !!matcher(chef && chef.origin, keyword)
-                    || !!matcher(chef && chef.ultimateSkillDisp, keyword)
-                    || !!matcher(chef && chef.tagsDisp, keyword);
-            }
-
-            keyword = keyword.toLowerCase();
-            return [
-                chef && chef.name,
-                chef && chef.specialSkillDisp,
-                chef && chef.origin,
-                chef && chef.ultimateSkillDisp,
-                chef && chef.tagsDisp
-            ].some(function(field) {
-                return String(field || '').toLowerCase().indexOf(keyword) >= 0;
             });
         }
 
-        function renderReplaceChefDialogBody(slotFilterValues, mustMatchAll, searchQuery) {
-            var filteredCandidates = filterReplaceChefCandidates(slotFilterValues, mustMatchAll).filter(function(item) {
-                return isReplaceChefMatchedBySearch(item && item.chef, searchQuery);
+        function compareReplaceChefItems(left, right) {
+            if (areaItem.prefix === 'lab') {
+                return (right.totalContribution || right.metric.rawValue) - (left.totalContribution || left.metric.rawValue);
+            }
+            if (areaItem.prefix === 'veg') {
+                if ((right.metric.expectation || 0) !== (left.metric.expectation || 0)) {
+                    return (right.metric.expectation || 0) - (left.metric.expectation || 0);
+                }
+                if (right.metric.rawValue !== left.metric.rawValue) {
+                    return right.metric.rawValue - left.metric.rawValue;
+                }
+                if (right.metric.score !== left.metric.score) {
+                    return right.metric.score - left.metric.score;
+                }
+                return toInt(right.chef.rarity, 0) - toInt(left.chef.rarity, 0);
+            }
+            if (areaItem.prefix === 'jade') {
+                if (right.metric.rawValue !== left.metric.rawValue) {
+                    return right.metric.rawValue - left.metric.rawValue;
+                }
+                return toInt(right.chef.rarity, 0) - toInt(left.chef.rarity, 0);
+            }
+            if (right.metric.score !== left.metric.score) {
+                return right.metric.score - left.metric.score;
+            }
+            if (right.metric.rawValue !== left.metric.rawValue) {
+                return right.metric.rawValue - left.metric.rawValue;
+            }
+            return toInt(right.chef.rarity, 0) - toInt(left.chef.rarity, 0);
+        }
+
+        function sortReplaceChefItems(items) {
+            return items.slice().sort(compareReplaceChefItems);
+        }
+
+        function compareReplaceChefSourceChefs(leftChef, rightChef) {
+            var leftItem = getReplaceSourceChefItem(leftChef);
+            var rightItem = getReplaceSourceChefItem(rightChef);
+
+            if (!leftItem && !rightItem) {
+                return 0;
+            }
+            if (!leftItem) {
+                return 1;
+            }
+            if (!rightItem) {
+                return -1;
+            }
+            return compareReplaceChefItems(leftItem, rightItem);
+        }
+
+        function getReplaceChefPageCount() {
+            return Math.max(1, Math.ceil(filteredSourceChefs.length / PAGE_SIZE));
+        }
+
+        function getReplaceChefPaginationItems() {
+            var totalPages = getReplaceChefPageCount();
+            var current = currentPageIndex + 1;
+            var pages = [];
+            var start;
+            var end;
+
+            if (totalPages <= 7) {
+                for (var page = 1; page <= totalPages; page++) {
+                    pages.push(page);
+                }
+                return pages;
+            }
+
+            pages.push(1);
+            if (current <= 4) {
+                pages.push(2, 3, 4, 5);
+                pages.push('ellipsis');
+            } else if (current >= totalPages - 3) {
+                pages.push('ellipsis');
+                for (start = totalPages - 4; start < totalPages; start++) {
+                    pages.push(start);
+                }
+            } else {
+                pages.push('ellipsis');
+                start = current - 1;
+                end = current + 1;
+                for (var middle = start; middle <= end; middle++) {
+                    pages.push(middle);
+                }
+                pages.push('ellipsis');
+            }
+            pages.push(totalPages);
+            return pages;
+        }
+
+        function renderReplaceChefPagination() {
+            var totalPages = getReplaceChefPageCount();
+            var items;
+
+            if (!displayCandidates.length || totalPages <= 1) {
+                return '';
+            }
+
+            items = getReplaceChefPaginationItems().map(function(item, index) {
+                if (item === 'ellipsis') {
+                    return '<span class="replace-chef-pagination-ellipsis" aria-hidden="true">...</span>';
+                }
+                return '<button type="button" class="replace-chef-pagination-btn' + (item === currentPageIndex + 1 ? ' is-active' : '') + '" data-page-index="' + (item - 1) + '">' + item + '</button>';
+            }).join('');
+
+            return '<div id="' + replacePageHintId + '" class="replace-chef-pagination">' + items + '</div>';
+        }
+
+        function loadReplaceChefPage(pageIndex) {
+            var pageStart = pageIndex * PAGE_SIZE;
+            var pageSourceChefs = filteredSourceChefs.slice(pageStart, pageStart + PAGE_SIZE);
+            displayCandidates = pageSourceChefs.map(function(sourceChef) {
+                return getReplaceSourceChefItem(sourceChef);
+            }).filter(function(item) {
+                return !!item;
             });
+            return displayCandidates.length;
+        }
+
+        function resetReplaceChefPagination(slotFilterValues, mustMatchAll, searchQuery) {
+            filteredSourceChefs = filterReplaceChefSourceChefs(slotFilterValues, mustMatchAll, searchQuery).sort(compareReplaceChefSourceChefs);
+            currentPageIndex = 0;
+            loadReplaceChefPage(currentPageIndex);
+        }
+
+        function renderReplaceChefDialogBody() {
+            var sortedCandidates = sortReplaceChefItems(displayCandidates);
             return currentArea.prefix === 'cond'
-                ? renderCondSections(filteredCandidates)
-                : renderReplaceChefList(filteredCandidates);
+                ? renderCondSections(sortedCandidates) + renderReplaceChefPagination()
+                : renderReplaceChefList(sortedCandidates) + renderReplaceChefPagination();
         }
 
         var dialogHtml = [
             '<div class="replace-chef-dialog">',
                 '<div class="replace-chef-dialog-header">',
-                    '<h3>' + (currentChefName ? '替换厨师 - ' : '补位厨师 - ') + escapeHtml(currentArea.areaName) + '</h3>',
+                    '<h3>' + escapeHtml((currentChefName ? '替换厨师' : '补位厨师') + ' - ' + currentArea.areaName + ' - ' + (currentChefName || '空位')) + '</h3>',
                     '<div class="replace-chef-header-tools">',
-                        currentChefName ? '<div class="replace-chef-current">当前: ' + escapeHtml(currentChefName) + '</div>' : '<div class="replace-chef-current">当前: 空位</div>',
                         '<div class="input-group replace-chef-header-picker-group">',
                             '<div class="select-wrapper input-group-first" data-toggle="tooltip" title="选择槽位,过滤厨师">',
-                            '<select id="' + replaceSlotFilterId + '" class="selectpicker monitor-none" multiple data-width="74px" data-dropdown-align-right="auto" data-none-selected-text="槽位" data-selected-text-format="count>1" data-count-selected-text="{0} 槽位" data-actions-box="true" data-actions-box-only-clear="true" data-deselect-all-text="清空" data-size="9">',
+                            '<select id="' + replaceSlotFilterId + '" class="selectpicker monitor-none" multiple data-width="88px" data-dropdown-align-right="auto" data-none-selected-text="槽位" data-selected-text-format="count>1" data-count-selected-text="{0} 槽位" data-actions-box="true" data-actions-box-only-clear="true" data-deselect-all-text="清空" data-size="9">',
                                 getReplaceChefSlotFilterOptionsHtml(),
                             '</select>',
                             '</div>',
@@ -7359,7 +7671,7 @@
                     '</div>',
                 '</div>',
                 '<div class="replace-chef-dialog-body">',
-                    renderReplaceChefDialogBody([], false, ''),
+                    renderReplaceChefDialogBody(),
                 '</div>',
             '</div>'
         ].join('');
@@ -7376,9 +7688,18 @@
             var $searchInput = dialog.find('#' + replaceSearchInputId);
             var $slotFilter = dialog.find('#' + replaceSlotFilterId);
             var $slotMatchAll = dialog.find('#' + replaceSlotMatchId);
+            var $dialogBody = dialog.find('.replace-chef-dialog-body');
 
-            function rerenderReplaceChefDialogBody() {
-                dialog.find('.replace-chef-dialog-body').html(renderReplaceChefDialogBody($slotFilter.val() || [], $slotMatchAll.prop('checked'), $searchInput.val() || ''));
+            function rerenderReplaceChefDialogBody(resetScrollTop) {
+                if (resetScrollTop) {
+                    $dialogBody.scrollTop(0);
+                }
+                $dialogBody.html(renderReplaceChefDialogBody());
+            }
+
+            function refreshReplaceChefPages(resetScrollTop) {
+                resetReplaceChefPagination($slotFilter.val() || [], $slotMatchAll.prop('checked'), $searchInput.val() || '');
+                rerenderReplaceChefDialogBody(resetScrollTop !== false);
             }
 
             if ($searchInput.length) {
@@ -7386,7 +7707,7 @@
                     if (typeof window.changeInputStyle === 'function') {
                         window.changeInputStyle(this);
                     }
-                    rerenderReplaceChefDialogBody();
+                    refreshReplaceChefPages(true);
                 });
             }
             if ($slotFilter.length) {
@@ -7403,14 +7724,31 @@
             }
             if ($slotMatchAll.length) {
                 $slotMatchAll.off('change.replaceSlotFilter').on('change.replaceSlotFilter', function() {
-                    rerenderReplaceChefDialogBody();
+                    refreshReplaceChefPages(true);
                 });
             }
             if ($slotFilter.length) {
                 $slotFilter.off('changed.bs.select.replaceSlotFilter').on('changed.bs.select.replaceSlotFilter', function() {
-                    rerenderReplaceChefDialogBody();
+                    refreshReplaceChefPages(true);
                 });
             }
+
+            dialog.off('shown.bs.tab.replaceChefTabs').on('shown.bs.tab.replaceChefTabs', '.replace-chef-tab-nav a[data-toggle="tab"]', function() {
+                var href = String($(this).attr('href') || '');
+                activeCondTab = href.indexOf('-expectation') >= 0 ? 'expectation' : 'value';
+            });
+
+            $dialogBody.off('click.replaceChefPaging').on('click.replaceChefPaging', '.replace-chef-pagination-btn', function() {
+                var nextPageIndex = toInt($(this).data('page-index'), currentPageIndex);
+                if (nextPageIndex === currentPageIndex || nextPageIndex < 0 || nextPageIndex >= getReplaceChefPageCount()) {
+                    return;
+                }
+                currentPageIndex = nextPageIndex;
+                loadReplaceChefPage(currentPageIndex);
+                rerenderReplaceChefDialogBody(true);
+            });
+
+            refreshReplaceChefPages(false);
         }
 
         try {
@@ -7629,6 +7967,100 @@
         render();
     }
 
+    function getCollectionDataQueryTableHtml() {
+        var table = COLLECTION_LAB_RESEARCH_VALUE_TABLE;
+        var headerRows = table.headers || [];
+        var mainHeader = headerRows[0] || [];
+        var subHeader = headerRows[1] || [];
+        var headerHtml = [
+            '<tr class="is-main-header">',
+                '<th>', escapeHtml(String(mainHeader[0] || '')), '</th>',
+                '<th rowspan="2">', escapeHtml(String(mainHeader[1] || '')), '</th>',
+                mainHeader.slice(2).map(function(cell) {
+                    return '<th>' + escapeHtml(String(cell || '')) + '</th>';
+                }).join(''),
+            '</tr>',
+            '<tr class="is-sub-header">',
+                '<th class="collection-data-query-compact-cell">', escapeHtml(String(subHeader[0] || '')), '</th>',
+                subHeader.slice(2).map(function(cell) {
+                    return '<th>' + escapeHtml(String(cell || '')) + '</th>';
+                }).join(''),
+            '</tr>'
+        ].join('');
+        var bodyHtml = (table.rows || []).map(function(row, index, rows) {
+            var valueCells = (row.values || []).map(function(value, valueIndex) {
+                if (valueIndex === 0) {
+                    return '<td rowspan="2">' + escapeHtml(String(value || '')) + '</td>';
+                }
+                return '<td>' + escapeHtml(String(value || '')) + '</td>';
+            }).join('');
+            var potCells = (row.potCounts || []).map(function(value, valueIndex) {
+                if (valueIndex === 0) {
+                    return '';
+                }
+                return '<td>' + escapeHtml(String(value || '')) + '</td>';
+            }).join('');
+            var rowHtml = [
+                '<tr class="collection-data-query-value-row">',
+                    '<td rowspan="2">', escapeHtml(String(row.reserveValue || '')), '</td>',
+                    '<td rowspan="2"' + (String(row.type || '').length >= 5 ? ' class="collection-data-query-compact-cell"' : '') + '>', escapeHtml(String(row.type || '')), '</td>',
+                    valueCells,
+                '</tr>',
+                '<tr class="collection-data-query-pot-row">',
+                    potCells,
+                '</tr>'
+            ].join('');
+
+            if (index >= 1 && index < rows.length - 1) {
+                rowHtml += '<tr class="collection-data-query-separator-row"><td colspan="12"></td></tr>';
+            }
+            return rowHtml;
+        }).join('') + '<tr class="collection-data-query-note-row"><td colspan="12">' + escapeHtml(table.note) + '</td></tr>';
+
+        return [
+            '<div class="collection-data-query-section">',
+                '<div class="collection-data-query-title">', escapeHtml(table.title), '</div>',
+                '<div class="collection-data-query-table-wrap">',
+                    '<table class="collection-data-query-table">',
+                        '<thead>', headerHtml, '</thead>',
+                        '<tbody>', bodyHtml, '</tbody>',
+                    '</table>',
+                '</div>',
+            '</div>'
+        ].join('');
+    }
+
+    function getCollectionDataQueryDialogHtml() {
+        return [
+            '<div class="collection-data-query-dialog">',
+                '<ul class="nav nav-tabs collection-data-query-tabs" role="tablist">',
+                    COLLECTION_DATA_QUERY_TABS.map(function(tab, index) {
+                        return '<li' + (index === 0 ? ' class="active"' : '') + '><a href="#collection-data-query-' + escapeHtml(tab.key) + '" data-toggle="tab">' + escapeHtml(tab.label) + '</a></li>';
+                    }).join(''),
+                '</ul>',
+                '<div class="tab-content collection-data-query-content">',
+                    '<div class="tab-pane" id="collection-data-query-jade">',
+                        '<div class="collection-data-query-empty"></div>',
+                    '</div>',
+                    '<div class="tab-pane active" id="collection-data-query-lab">',
+                        getCollectionDataQueryTableHtml(),
+                    '</div>',
+                '</div>',
+            '</div>'
+        ].join('');
+    }
+
+    function showCollectionDataQueryDialog() {
+        bootbox.dialog({
+            title: '数据查询',
+            className: 'collection-data-query-modal',
+            backdrop: true,
+            onEscape: true,
+            message: getCollectionDataQueryDialogHtml(),
+            buttons: {}
+        });
+    }
+
     // =============================
     // 事件绑定区
     // 说明：这里统一绑定采集编队模式下的交互事件。
@@ -7640,6 +8072,11 @@
     $(document).on('click', '#collection-team-root [data-action="open-config"]', function(e) {
         e.stopPropagation(); // 阻止事件冒泡，避免触发折叠
         showAreaConfigDialog();
+    });
+
+    $(document).on('click', '#collection-team-root [data-action="open-data-query"]', function(e) {
+        e.stopPropagation();
+        showCollectionDataQueryDialog();
     });
 
     // 打开区域配置弹窗（通用/菜地/玉片/实验室/调料）。

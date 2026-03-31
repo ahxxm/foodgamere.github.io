@@ -701,13 +701,13 @@
 }
 
 .replace-chef-header-picker-group .bootstrap-select {
-    width: 74px !important;
-    min-width: 74px;
+    width: 88px !important;
+    min-width: 88px;
 }
 
 .replace-chef-header-picker-group .bootstrap-select > .dropdown-toggle {
-    width: 74px !important;
-    min-width: 74px;
+    width: 88px !important;
+    min-width: 88px;
     height: 30px;
     padding: 4px 22px 4px 8px;
     font-size: 12px;
@@ -768,6 +768,51 @@
     padding: 16px;
     overflow-y: auto;
     flex: 1;
+}
+
+.replace-chef-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    width: fit-content;
+    margin: 14px auto 2px;
+    border: 1px solid #d8e0ea;
+    border-radius: 4px;
+    overflow: hidden;
+    background: #fff;
+}
+
+.replace-chef-pagination-btn,
+.replace-chef-pagination-ellipsis {
+    min-width: 34px;
+    height: 32px;
+    padding: 0 10px;
+    border: 0;
+    border-right: 1px solid #d8e0ea;
+    background: #fff;
+    color: #4f6b87;
+    font-size: 14px;
+    line-height: 32px;
+    text-align: center;
+}
+
+.replace-chef-pagination-btn:last-child,
+.replace-chef-pagination-ellipsis:last-child {
+    border-right: 0;
+}
+
+.replace-chef-pagination-btn:hover {
+    background: #f4f8fc;
+}
+
+.replace-chef-pagination-btn.is-active {
+    background: #2f77b8;
+    color: #fff;
+}
+
+.replace-chef-pagination-ellipsis {
+    color: #90a0b2;
 }
 
 .replace-chef-tab-nav {
@@ -866,6 +911,11 @@
     color: #d84315;
 }
 
+.replace-chef-item-inline-tag.is-expectation {
+    background: #eef7ea;
+    color: #4a8f3a;
+}
+
 .replace-chef-item-ult {
     display: inline-flex;
     align-items: center;
@@ -909,8 +959,8 @@
 }
 
 .replace-chef-item-value-chip.is-expectation {
-    background: #fff4de;
-    color: #cc7a00;
+    background: #eef7ea;
+    color: #4a8f3a;
 }
 
 .replace-chef-item-skill-metrics {
@@ -2340,7 +2390,8 @@
     .collection-team-saved-modal .modal-dialog,
     .collection-team-detail-modal .modal-dialog,
     .collection-team-scheme-modal .modal-dialog,
-    .replace-chef-modal .modal-dialog {
+    .replace-chef-modal .modal-dialog,
+    .collection-data-query-modal .modal-dialog {
         width: calc(100vw - 16px);
         margin: 8px auto;
     }
@@ -2386,7 +2437,8 @@
 
     .collection-team-saved-modal .modal-body,
     .collection-team-detail-modal .modal-body,
-    .collection-team-scheme-modal .modal-body {
+    .collection-team-scheme-modal .modal-body,
+    .collection-data-query-modal .modal-body {
         padding: 12px;
     }
 
@@ -2451,6 +2503,111 @@
 .collection-config-btn {
     padding: 2px 8px;
     font-size: 12px;
+}
+
+.collection-data-query-modal .modal-dialog {
+    width: calc(100vw - 32px);
+    max-width: 1080px;
+    margin: 24px auto;
+}
+
+.collection-data-query-modal .modal-content {
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.collection-data-query-modal .modal-body {
+    padding: 12px;
+}
+
+.collection-data-query-dialog {
+    min-height: 420px;
+}
+
+.collection-data-query-tabs {
+    margin-bottom: 12px;
+}
+
+.collection-data-query-content {
+    min-height: 360px;
+}
+
+.collection-data-query-empty {
+    min-height: 320px;
+}
+
+.collection-data-query-title {
+    margin-bottom: 10px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #22313f;
+}
+
+.collection-data-query-table-wrap {
+    overflow: auto;
+    border: 1px solid #e5e9ef;
+    border-radius: 8px;
+    background: #fff;
+}
+
+.collection-data-query-table {
+    width: 100%;
+    min-width: 920px;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+
+.collection-data-query-table th,
+.collection-data-query-table td {
+    padding: 8px 10px;
+    border: 1px solid #e9edf3;
+    font-size: 12px;
+    line-height: 1.4;
+    text-align: center;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+.collection-data-query-table thead tr.is-main-header th {
+    background: #f3f6fa;
+    color: #22313f;
+    font-weight: 600;
+}
+
+.collection-data-query-table thead tr.is-sub-header th {
+    background: #fafbfd;
+    color: #7a8795;
+    font-weight: 500;
+}
+
+.collection-data-query-table .collection-data-query-compact-cell {
+    font-size: 11px;
+}
+
+.collection-data-query-table tbody tr.collection-data-query-value-row td:nth-child(1),
+.collection-data-query-table tbody tr.collection-data-query-value-row td:nth-child(2) {
+    font-weight: 600;
+    color: #22313f;
+}
+
+.collection-data-query-table tbody tr.collection-data-query-pot-row td {
+    color: #6b7785;
+    background: #fafbfd;
+}
+
+.collection-data-query-table tbody tr.collection-data-query-separator-row td {
+    height: 18px;
+    padding: 0;
+    background: #fff;
+    border-left-color: transparent;
+    border-right-color: transparent;
+}
+
+.collection-data-query-table tbody tr.collection-data-query-note-row td {
+    font-size: 12px;
+    color: #8a94a3;
+    text-align: left;
+    background: #fff;
 }
 
 /* 配置面板样式 */
@@ -2694,6 +2851,20 @@
 
     #area-config-modal .config-cond-picker > .dropdown-toggle {
         padding-right: 20px;
+        font-size: 11px;
+    }
+
+    .collection-data-query-content {
+        min-height: 300px;
+    }
+
+    .collection-data-query-empty {
+        min-height: 260px;
+    }
+
+    .collection-data-query-table th,
+    .collection-data-query-table td {
+        padding: 7px 8px;
         font-size: 11px;
     }
 }
