@@ -367,6 +367,32 @@
         window.localStorage.setItem(getCollectionStorageKey(name), value ? 'true' : 'false');
     }
 
+    // 读取迁移中的布尔配置，兼容旧 key 并自动写入新 key。
+    function loadMigratedBooleanSetting(name, legacyName, fallback) {
+        var currentValue = window.localStorage.getItem(getCollectionStorageKey(name));
+        var legacyValue;
+        if (currentValue !== null) {
+            return currentValue === 'true';
+        }
+        if (!legacyName) {
+            return fallback;
+        }
+        legacyValue = window.localStorage.getItem(getCollectionStorageKey(legacyName));
+        if (legacyValue === null) {
+            return fallback;
+        }
+        saveBooleanSetting(name, legacyValue === 'true');
+        return legacyValue === 'true';
+    }
+
+    function loadExcludeAssassinChefSetting() {
+        return loadMigratedBooleanSetting('useExcludeAssassinChef', 'useCondExcludeAssassinChef', false);
+    }
+
+    function loadExcludeGuestChefSetting() {
+        return loadBooleanSetting('useExcludeGuestChef', false);
+    }
+
     // 读取统一区域排序；兼容历史逗号串与新JSON格式。
     function loadUnifiedAreaOrder() {
         var raw = window.localStorage.getItem(getCollectionStorageKey('unified_area_order'));
@@ -4297,6 +4323,8 @@
         var priceBonus = 0;
         var hasRareGuestSkill = false;
         var hasOpeningTimeSkill = false;
+        var hasChefOpeningTimeSkill = false;
+        var hasChefGuestAppearRateSkill = false;
         var activeSelfUltimateEffects = getActiveSelfUltimateEffectsForCollection(chef);
         var activeUltimateDesc = activeSelfUltimateEffects.length > 0 ? String(chef.ultimateSkillDisp || '') : '';
 
@@ -4358,8 +4386,9 @@
         }
 
         // 扫描effect列表，累加素材/售价/标签类元信息。
-        function scanEffects(effects, sourceDesc) {
+        function scanEffects(effects, sourceDesc, options) {
             var isCritSource = isCritMaterialSkillDesc(sourceDesc);
+            var isChefSkillSource = !!(options && options.isChefSkillSource);
             (effects || []).forEach(function(effect) {
                 var effectType;
                 var effectValue;
@@ -4384,8 +4413,30 @@
                     priceBonus += effectValue;
                 } else if (effectType.indexOf('RareGuest') >= 0) {
                     hasRareGuestSkill = true;
+                } else if (effectType === 'GuestApearRate') {
+                    if (isChefSkillSource) {
+                        hasChefGuestAppearRateSkill = true;
+                    }
                 } else if (effectType === 'OpenTime' || effectType === 'CookbookTime') {
                     hasOpeningTimeSkill = true;
+                    if (isChefSkillSource) {
+                        hasChefOpeningTimeSkill = true;
+                    }
+                }
+            });
+        }
+
+        function scanChefIdentityEffects(effects) {
+            (effects || []).forEach(function(effect) {
+                var effectType;
+                if (!effect) {
+                    return;
+                }
+                effectType = String(effect.type || '');
+                if (effectType === 'GuestApearRate') {
+                    hasChefGuestAppearRateSkill = true;
+                } else if (effectType === 'OpenTime' || effectType === 'CookbookTime') {
+                    hasChefOpeningTimeSkill = true;
                 }
             });
         }
@@ -4421,8 +4472,9 @@
         var effectiveEquipEffects = getEffectiveEquipEffects();
         var allowAmberMaterialEffects = getAreaGroupKeyByAreaName(String(chef.__queryAreaName || '')) === 'veg';
 
-        scanEffects(chef.specialSkillEffect, chef.specialSkillDisp);
-        scanEffects(activeSelfUltimateEffects, activeUltimateDesc);
+        scanChefIdentityEffects(chef.ultimateSkillEffect);
+        scanEffects(chef.specialSkillEffect, chef.specialSkillDisp, { isChefSkillSource: true });
+        scanEffects(activeSelfUltimateEffects, activeUltimateDesc, { isChefSkillSource: true });
         scanEffects(effectiveEquipEffects, chef.equip && (chef.equip.skillDisp || chef.equip.desc || ''));
 
         if (allowAmberMaterialEffects && chef.disk && Array.isArray(chef.disk.ambers)) {
@@ -4488,6 +4540,8 @@
             priceBonus: priceBonus,
             hasRareGuestSkill: hasRareGuestSkill,
             hasOpeningTimeSkill: hasOpeningTimeSkill,
+            hasChefOpeningTimeSkill: hasChefOpeningTimeSkill,
+            hasChefGuestAppearRateSkill: hasChefGuestAppearRateSkill,
             redAmberCount: chef.disk && Array.isArray(chef.disk.ambers) ? chef.disk.ambers.filter(function(slot) {
                 return slot && slot.type === 1 && slot.data;
             }).length : 0,
@@ -4510,6 +4564,26 @@
     function getCollectionExpectation(meta) {
         meta = meta || {};
         return (meta.materialGain || 0) + ((meta.critChance || 0) / 100 * (meta.critMaterial || 0));
+    }
+
+    function getCollectionCommonFilterSettings() {
+        return {
+            excludeAssassinChef: loadExcludeAssassinChefSetting(),
+            excludeGuestChef: loadExcludeGuestChefSetting()
+        };
+    }
+
+    function isCollectionChefExcludedByCommonConfig(meta, commonFilterSettings) {
+        var settings = commonFilterSettings || getCollectionCommonFilterSettings();
+        var targetMeta = meta || {};
+
+        if (settings.excludeAssassinChef && targetMeta.hasChefOpeningTimeSkill) {
+            return true;
+        }
+        if (settings.excludeGuestChef && targetMeta.hasChefGuestAppearRateSkill) {
+            return true;
+        }
+        return false;
     }
 
     // 菜地候选保护规则：用于排序时降低被替换概率（与旧逻辑保持一致）。
@@ -4768,6 +4842,7 @@
         var savedChefNameSet;
         var ultimateData;
         var partialAdds;
+        var commonFilterSettings = getCollectionCommonFilterSettings();
         var chefs = [];
 
         if (!context) {
@@ -4840,6 +4915,9 @@
                 : 0;
             meta = getChefMaterialSkillMeta(chef);
             chef.__queryMeta = meta;
+            if (isCollectionChefExcludedByCommonConfig(meta, commonFilterSettings)) {
+                return;
+            }
             chefs.push(chef);
         });
 
@@ -4876,6 +4954,44 @@
             '永昼宫': { label: '菜+鱼', keys: ['vegVal', 'fishVal'] }
         };
         return configMap[areaName] || { label: '', keys: [] };
+    }
+
+    function getCollectionValueKeyLabel(key) {
+        var labelMap = {
+            meatVal: '肉',
+            fishVal: '鱼',
+            vegVal: '菜',
+            creationVal: '面'
+        };
+
+        return labelMap[String(key || '')] || '';
+    }
+
+    function buildJadeValueDisplayHtml(areaName, item) {
+        var jadeTarget = getJadeTargetConfig(areaName);
+        var parts = (jadeTarget.keys || []).map(function(key, index) {
+            return {
+                key: key,
+                label: getCollectionValueKeyLabel(key),
+                value: toInt(item && item[key], 0),
+                index: index
+            };
+        }).filter(function(part) {
+            return !!part.label;
+        }).sort(function(left, right) {
+            if (right.value !== left.value) {
+                return right.value - left.value;
+            }
+            return left.index - right.index;
+        });
+
+        if (!parts.length) {
+            return escapeHtml(String(item && item.valueLabel || '采集点')) + ' <span class="collection-result-chef-value-number">' + toInt(item && item.rawValue, 0) + '</span>';
+        }
+
+        return parts.map(function(part) {
+            return escapeHtml(part.label) + part.value;
+        }).join('+') + '=<span class="collection-result-chef-value-number">' + toInt(item && item.rawValue, 0) + '</span>';
     }
 
     // 检查厨师是否是光环厨师，并返回光环信息
@@ -5440,7 +5556,7 @@
         var totalValue = 0;
         var chefSourceMap = {};
         var useAutoGapAmber = !chefPoolData.context.applyAmbers && loadBooleanSetting('useCondAutoAmber', false);
-        var excludeAssassinChef = loadBooleanSetting('useCondExcludeAssassinChef', false);
+        var commonFilterSettings = getCollectionCommonFilterSettings();
 
         function getChefKey(chef) {
             return String(chef && (chef.chefId || chef.id || chef.name) || '');
@@ -5463,12 +5579,7 @@
 
         function isCondQueryExcludedChef(item) {
             var meta = item && item.meta ? item.meta : {};
-
-            if (!excludeAssassinChef) {
-                return false;
-            }
-
-            return !!meta.hasOpeningTimeSkill;
+            return isCollectionChefExcludedByCommonConfig(meta, commonFilterSettings);
         }
 
         function buildCondCandidate(chef, phase, options) {
@@ -5683,6 +5794,7 @@
     // 菜地区查询：
     // 按采集期望优先选人；若总采集点不足，尝试用低期望高采集值厨师兜底替换。
     function executeVegAreaQuery(areaItem, availableChefs, chefPoolData) {
+        var commonFilterSettings = getCollectionCommonFilterSettings();
         var allCandidates = sortVegCandidates(availableChefs.map(function(chef) {
             // 克隆厨师对象，避免影响其他区域的查询
             var clonedChef = cloneData(chef);
@@ -5715,7 +5827,7 @@
                 chef: clonedChef
             }, metric);
         }).filter(function(item) {
-            return item.rawValue > 0 && !item.meta.hasRareGuestSkill && !item.meta.hasOpeningTimeSkill;
+            return item.rawValue > 0 && !item.meta.hasRareGuestSkill && !isCollectionChefExcludedByCommonConfig(item.meta, commonFilterSettings);
         }));
         var selected = allCandidates.slice(0, areaItem.people);
         var totalValue = selected.reduce(function(total, item) {
@@ -5971,13 +6083,13 @@
             secondRowHtml.push('<span class="collection-result-chef-meta-item is-crit-chance">暴击率 ' + item.critChance + '%</span>');
         } else {
             // 玉片区：第二行显示采集点、厨具和采集期望值
+            headExtraHtml = '<span class="collection-result-chef-meta-item is-expectation">采集期望值 ' + item.collectionExpectation + '</span>';
             if (toInt(item.greenAmberSlotCount, 0) > 0) {
-                headExtraHtml = '<span class="collection-result-chef-green-amber-inline">绿色心法盘*' + toInt(item.greenAmberSlotCount, 0) + '</span>';
+                headExtraHtml += '<span class="collection-result-chef-green-amber-inline">绿色心法盘*' + toInt(item.greenAmberSlotCount, 0) + '</span>';
             }
-            metaHtml.push('<span class="collection-result-chef-meta-item is-jade-value">' + escapeHtml(item.valueLabel) + ' <span class="collection-result-chef-value-number">' + item.rawValue + '</span></span>');
+            metaHtml.push('<span class="collection-result-chef-meta-item is-jade-value">' + buildJadeValueDisplayHtml(areaName, item) + '</span>');
             metaHtml.push(equipHtml);
             metaHtml.push(greenAmberMetaHtml);
-            metaHtml.push('<span class="collection-result-chef-meta-item is-expectation">采集期望值 ' + item.collectionExpectation + '</span>');
             
             // 第三行：素材、暴击素材、暴击率
             var jadeTeamBonusText = buildCollectionTeamBonusText();
@@ -6928,6 +7040,7 @@
         var highlightKey = getCollectionHighlightKeyByAreaName(currentArea.areaName);
         var displayCandidates = Array.isArray(candidates) ? candidates : [];
         var condTabBaseId = 'replace-chef-cond-' + Date.now();
+        var replaceSearchInputId = 'replace-chef-search-' + Date.now();
         var replaceSlotFilterId = 'replace-chef-slot-filter-' + Date.now();
         var replaceSlotMatchId = 'replace-chef-slot-match-' + Date.now();
         var currentChefItem = currentChefName ? (currentArea.chefs || []).find(function(chef) {
@@ -7089,7 +7202,7 @@
                     return (right.metric.expectation || 0) - (left.metric.expectation || 0);
                 }
                 return right.metric.score - left.metric.score;
-            }).slice(0, 20);
+            });
             var byExpectation = items.slice().sort(function(left, right) {
                 if ((right.metric.expectation || 0) !== (left.metric.expectation || 0)) {
                     return (right.metric.expectation || 0) - (left.metric.expectation || 0);
@@ -7098,7 +7211,7 @@
                     return right.metric.rawValue - left.metric.rawValue;
                 }
                 return right.metric.score - left.metric.score;
-            }).slice(0, 20);
+            });
 
             return [
                 '<div class="replace-chef-tabs">',
@@ -7185,11 +7298,41 @@
             });
         }
 
-        function renderReplaceChefDialogBody(slotFilterValues, mustMatchAll) {
-            var filteredCandidates = filterReplaceChefCandidates(slotFilterValues, mustMatchAll);
+        function isReplaceChefMatchedBySearch(chef, query) {
+            var keyword = $.trim(String(query || ''));
+            var matcher = typeof window.commaSeparatedMatch === 'function' ? window.commaSeparatedMatch : null;
+
+            if (!keyword) {
+                return true;
+            }
+
+            if (matcher) {
+                return !!matcher(chef && chef.name, keyword)
+                    || !!matcher(chef && chef.specialSkillDisp, keyword)
+                    || !!matcher(chef && chef.origin, keyword)
+                    || !!matcher(chef && chef.ultimateSkillDisp, keyword)
+                    || !!matcher(chef && chef.tagsDisp, keyword);
+            }
+
+            keyword = keyword.toLowerCase();
+            return [
+                chef && chef.name,
+                chef && chef.specialSkillDisp,
+                chef && chef.origin,
+                chef && chef.ultimateSkillDisp,
+                chef && chef.tagsDisp
+            ].some(function(field) {
+                return String(field || '').toLowerCase().indexOf(keyword) >= 0;
+            });
+        }
+
+        function renderReplaceChefDialogBody(slotFilterValues, mustMatchAll, searchQuery) {
+            var filteredCandidates = filterReplaceChefCandidates(slotFilterValues, mustMatchAll).filter(function(item) {
+                return isReplaceChefMatchedBySearch(item && item.chef, searchQuery);
+            });
             return currentArea.prefix === 'cond'
                 ? renderCondSections(filteredCandidates)
-                : renderReplaceChefList(filteredCandidates.slice(0, 20));
+                : renderReplaceChefList(filteredCandidates);
         }
 
         var dialogHtml = [
@@ -7200,7 +7343,7 @@
                         currentChefName ? '<div class="replace-chef-current">当前: ' + escapeHtml(currentChefName) + '</div>' : '<div class="replace-chef-current">当前: 空位</div>',
                         '<div class="input-group replace-chef-header-picker-group">',
                             '<div class="select-wrapper input-group-first" data-toggle="tooltip" title="选择槽位,过滤厨师">',
-                            '<select id="' + replaceSlotFilterId + '" class="selectpicker monitor-none" multiple data-width="80px" data-dropdown-align-right="auto" data-none-selected-text="槽位" data-selected-text-format="count>1" data-count-selected-text="{0} 槽位" data-actions-box="true" data-actions-box-only-clear="true" data-deselect-all-text="清空" data-size="9">',
+                            '<select id="' + replaceSlotFilterId + '" class="selectpicker monitor-none" multiple data-width="74px" data-dropdown-align-right="auto" data-none-selected-text="槽位" data-selected-text-format="count>1" data-count-selected-text="{0} 槽位" data-actions-box="true" data-actions-box-only-clear="true" data-deselect-all-text="清空" data-size="9">',
                                 getReplaceChefSlotFilterOptionsHtml(),
                             '</select>',
                             '</div>',
@@ -7212,10 +7355,11 @@
                                 '</label>',
                             '</span>',
                         '</div>',
+                        '<div class="search-box replace-chef-search-box"><input id="' + replaceSearchInputId + '" type="search" class="form-control input-sm monitor-none" placeholder="名字 技能 来源"></div>',
                     '</div>',
                 '</div>',
                 '<div class="replace-chef-dialog-body">',
-                    renderReplaceChefDialogBody([], false),
+                    renderReplaceChefDialogBody([], false, ''),
                 '</div>',
             '</div>'
         ].join('');
@@ -7229,13 +7373,22 @@
         });
 
         function initReplaceChefHeaderControls() {
+            var $searchInput = dialog.find('#' + replaceSearchInputId);
             var $slotFilter = dialog.find('#' + replaceSlotFilterId);
             var $slotMatchAll = dialog.find('#' + replaceSlotMatchId);
 
             function rerenderReplaceChefDialogBody() {
-                dialog.find('.replace-chef-dialog-body').html(renderReplaceChefDialogBody($slotFilter.val() || [], $slotMatchAll.prop('checked')));
+                dialog.find('.replace-chef-dialog-body').html(renderReplaceChefDialogBody($slotFilter.val() || [], $slotMatchAll.prop('checked'), $searchInput.val() || ''));
             }
 
+            if ($searchInput.length) {
+                $searchInput.off('input.replaceChefSearch').on('input.replaceChefSearch', function() {
+                    if (typeof window.changeInputStyle === 'function') {
+                        window.changeInputStyle(this);
+                    }
+                    rerenderReplaceChefDialogBody();
+                });
+            }
             if ($slotFilter.length) {
                 if ($slotFilter.data('selectpicker')) {
                     try {
@@ -7489,7 +7642,7 @@
         showAreaConfigDialog();
     });
 
-    // 打开区域配置弹窗（菜地/玉片/实验室）。
+    // 打开区域配置弹窗（通用/菜地/玉片/实验室/调料）。
     function showAreaConfigDialog() {
         var html = [
             '<div class="modal fade" id="area-config-modal" tabindex="-1">',
@@ -7505,6 +7658,7 @@
                                 '<li><a href="#config-jade" data-toggle="tab">玉片区</a></li>',
                                 '<li><a href="#config-lab" data-toggle="tab">实验室</a></li>',
                                 '<li><a href="#config-cond" data-toggle="tab">调料区</a></li>',
+                                '<li><a href="#config-common" data-toggle="tab">通用配置</a></li>',
                             '</ul>',
                             '<div class="tab-content" style="margin-top: 15px;">',
                                 '<div class="tab-pane active" id="config-veg">',
@@ -7518,6 +7672,9 @@
                                 '</div>',
                                 '<div class="tab-pane" id="config-cond">',
                                     getCondConfigPanel(),
+                                '</div>',
+                                '<div class="tab-pane" id="config-common">',
+                                    getCommonConfigPanel(),
                                 '</div>',
                             '</div>',
                         '</div>',
@@ -7674,6 +7831,34 @@
         });
     }
 
+    function getCommonConfigPanel() {
+        var useExcludeAssassinChef = loadExcludeAssassinChefSetting();
+        var useExcludeGuestChef = loadExcludeGuestChefSetting();
+
+        return [
+            '<div class="config-panel">',
+                '<div class="config-item">',
+                    '<div class="config-item-header">',
+                        '<label class="config-label">',
+                            '<input type="checkbox" class="config-checkbox" data-key="useExcludeAssassinChef"', useExcludeAssassinChef ? ' checked' : '', '>',
+                            '<span class="config-title">不使用刺客厨师</span>',
+                        '</label>',
+                    '</div>',
+                    '<div class="config-item-desc">所有地区查询时，排除开业时间类的厨师</div>',
+                '</div>',
+                '<div class="config-item">',
+                    '<div class="config-item-header">',
+                        '<label class="config-label">',
+                            '<input type="checkbox" class="config-checkbox" data-key="useExcludeGuestChef"', useExcludeGuestChef ? ' checked' : '', '>',
+                            '<span class="config-title">不使用贵客厨师</span>',
+                        '</label>',
+                    '</div>',
+                    '<div class="config-item-desc">所有地区查询时，排除贵客类厨师</div>',
+                '</div>',
+            '</div>'
+        ].join('');
+    }
+
     // 菜地区配置面板。
     function getVegConfigPanel() {
         var useSilverShoes = loadBooleanSetting('useSilverShoes', false);
@@ -7767,7 +7952,6 @@
         var useCondSilverShoes = loadBooleanSetting('useCondSilverShoes', false);
         var useCondGoldenSilkBoots = loadBooleanSetting('useCondGoldenSilkBoots', false);
         var useCondAutoAmber = loadBooleanSetting('useCondAutoAmber', false);
-        var useCondExcludeAssassinChef = loadBooleanSetting('useCondExcludeAssassinChef', false);
 
         if (useCondSilverShoes && useCondGoldenSilkBoots) {
             useCondSilverShoes = false;
@@ -7811,15 +7995,6 @@
                         '</label>',
                     '</div>',
                     '<div class="config-item-desc">未勾选已配遗玉时，自动搭配遗玉</div>',
-                '</div>',
-                '<div class="config-item">',
-                    '<div class="config-item-header">',
-                        '<label class="config-label">',
-                            '<input type="checkbox" class="config-checkbox" data-key="useCondExcludeAssassinChef"', useCondExcludeAssassinChef ? ' checked' : '', '>',
-                            '<span class="config-title">不使用刺客厨师</span>',
-                        '</label>',
-                    '</div>',
-                    '<div class="config-item-desc">查询时排除带开业时间技能的厨师</div>',
                 '</div>',
                 '<div class="config-item">',
                     '<div class="config-item-header">',

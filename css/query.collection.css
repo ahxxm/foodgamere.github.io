@@ -668,7 +668,19 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
+}
+
+.replace-chef-search-box {
+    flex: 0 0 128px;
+    width: 128px;
+    min-width: 0;
+}
+
+.replace-chef-search-box input.form-control {
+    width: 100%;
+    padding: 6px 8px;
+    font-size: 12px;
 }
 
 .replace-chef-header-tools .input-group {
@@ -676,6 +688,7 @@
     width: auto;
     margin-bottom: 0;
     flex: 0 0 auto;
+    white-space: nowrap;
 }
 
 .replace-chef-header-tools .select-wrapper {
@@ -687,18 +700,67 @@
     white-space: nowrap;
 }
 
+.replace-chef-header-picker-group .bootstrap-select {
+    width: 74px !important;
+    min-width: 74px;
+}
+
+.replace-chef-header-picker-group .bootstrap-select > .dropdown-toggle {
+    width: 74px !important;
+    min-width: 74px;
+    height: 30px;
+    padding: 4px 22px 4px 8px;
+    font-size: 12px;
+    line-height: 20px;
+}
+
+.replace-chef-header-picker-group .input-group-btn > .btn {
+    min-width: 52px;
+    height: 30px;
+    padding: 4px 8px;
+    font-size: 12px;
+    line-height: 20px;
+}
+
 @media (max-width: 767px) {
     .replace-chef-current {
         font-size: 13px;
     }
 
     .replace-chef-header-tools {
-        gap: 6px;
+        gap: 6px 4px;
+    }
+
+    .replace-chef-search-box {
+        order: 3;
+        flex: 0 0 116px;
+        width: 116px;
+    }
+
+    .replace-chef-search-box input.form-control {
+        padding: 5px 7px;
+        font-size: 12px;
     }
 
     .replace-chef-header-tools .input-group .btn,
     .replace-chef-header-tools .input-group .bootstrap-select > .dropdown-toggle {
         font-size: 12px;
+    }
+
+    .replace-chef-header-picker-group .bootstrap-select {
+        width: 68px !important;
+        min-width: 68px;
+    }
+
+    .replace-chef-header-picker-group .bootstrap-select > .dropdown-toggle {
+        width: 68px !important;
+        min-width: 68px;
+        padding: 4px 18px 4px 7px;
+    }
+
+    .replace-chef-header-picker-group .input-group-btn > .btn {
+        min-width: 46px;
+        padding: 4px 6px;
     }
 }
 
