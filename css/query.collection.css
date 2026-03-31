@@ -644,7 +644,7 @@
 
 .replace-chef-dialog {
     background: #fff;
-    max-height: 60vh;
+    max-height: 80vh;
     display: flex;
     flex-direction: column;
 }
@@ -664,6 +664,49 @@
 .replace-chef-current {
     font-size: 14px;
     color: #666;
+    flex: 1 1 auto;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.replace-chef-header-tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: nowrap;
+}
+
+.replace-chef-header-tools .input-group {
+    display: inline-table;
+    width: auto;
+    margin-bottom: 0;
+    flex: 0 0 auto;
+}
+
+.replace-chef-header-tools .select-wrapper {
+    width: auto;
+}
+
+.replace-chef-header-tools .input-group-btn {
+    width: 1%;
+    white-space: nowrap;
+}
+
+@media (max-width: 767px) {
+    .replace-chef-current {
+        font-size: 13px;
+    }
+
+    .replace-chef-header-tools {
+        gap: 6px;
+    }
+
+    .replace-chef-header-tools .input-group .btn,
+    .replace-chef-header-tools .input-group .bootstrap-select > .dropdown-toggle {
+        font-size: 12px;
+    }
 }
 
 .replace-chef-dialog-body {

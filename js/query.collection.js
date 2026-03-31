@@ -7201,7 +7201,7 @@
                     '<h3>' + (currentChefName ? '替换厨师 - ' : '补位厨师 - ') + escapeHtml(currentArea.areaName) + '</h3>',
                     '<div class="replace-chef-header-tools">',
                         currentChefName ? '<div class="replace-chef-current">当前: ' + escapeHtml(currentChefName) + '</div>' : '<div class="replace-chef-current">当前: 空位</div>',
-                        '<div class="input-group">',
+                        '<div class="input-group replace-chef-header-picker-group">',
                             '<div class="select-wrapper input-group-first" data-toggle="tooltip" title="选择槽位,过滤厨师">',
                             '<select id="' + replaceSlotFilterId + '" class="selectpicker monitor-none" multiple data-width="80px" data-dropdown-align-right="auto" data-none-selected-text="槽位" data-selected-text-format="count>1" data-count-selected-text="{0} 槽位" data-actions-box="true" data-actions-box-only-clear="true" data-deselect-all-text="清空" data-size="9">',
                                 getReplaceChefSlotFilterOptionsHtml(),
@@ -7231,35 +7231,56 @@
             onEscape: true
         });
 
-        dialog.on('shown.bs.modal', function() {
-            try {
-                var $slotFilter = dialog.find('#' + replaceSlotFilterId);
-                var $slotMatchAll = dialog.find('#' + replaceSlotMatchId);
-                function rerenderReplaceChefDialogBody() {
-                    dialog.find('.replace-chef-dialog-body').html(renderReplaceChefDialogBody($slotFilter.val() || [], $slotMatchAll.prop('checked')));
+        function initReplaceChefHeaderControls() {
+            var $slotFilter = dialog.find('#' + replaceSlotFilterId);
+            var $slotMatchAll = dialog.find('#' + replaceSlotMatchId);
+
+            function rerenderReplaceChefDialogBody() {
+                dialog.find('.replace-chef-dialog-body').html(renderReplaceChefDialogBody($slotFilter.val() || [], $slotMatchAll.prop('checked')));
+            }
+
+            if ($slotFilter.length) {
+                if ($slotFilter.data('selectpicker')) {
+                    try {
+                        $slotFilter.selectpicker('destroy');
+                    } catch (e) {}
                 }
-                if ($slotFilter.length) {
-                    if ($slotFilter.data('selectpicker')) {
-                        try {
-                            $slotFilter.selectpicker('destroy');
-                        } catch (e) {}
-                    }
-                    $slotFilter.html(getReplaceChefSlotFilterOptionsHtml());
-                    $slotFilter.selectpicker();
-                    $slotFilter.selectpicker('val', []);
-                    $slotFilter.selectpicker('refresh');
-                    $slotFilter.selectpicker('render');
-                    $slotFilter.off('changed.bs.select.replaceSlotFilter').on('changed.bs.select.replaceSlotFilter', function() {
-                        rerenderReplaceChefDialogBody();
-                    });
-                }
-                if ($slotMatchAll.length) {
-                    $slotMatchAll.off('change.replaceSlotFilter').on('change.replaceSlotFilter', function() {
-                        rerenderReplaceChefDialogBody();
-                    });
-                }
-            } catch (e) {}
-        });
+                $slotFilter.html(getReplaceChefSlotFilterOptionsHtml());
+                $slotFilter.selectpicker();
+                $slotFilter.selectpicker('val', []);
+                $slotFilter.selectpicker('refresh');
+                $slotFilter.selectpicker('render');
+            }
+            if ($slotMatchAll.length) {
+                $slotMatchAll.off('change.replaceSlotFilter').on('change.replaceSlotFilter', function() {
+                    rerenderReplaceChefDialogBody();
+                });
+            }
+            if ($slotFilter.length) {
+                $slotFilter.off('changed.bs.select.replaceSlotFilter').on('changed.bs.select.replaceSlotFilter', function() {
+                    rerenderReplaceChefDialogBody();
+                });
+            }
+        }
+
+        try {
+            var $modalContent = dialog.find('.modal-content');
+            var revealModalContent = function() {
+                $modalContent.css('visibility', '');
+            };
+
+            if ($modalContent.length) {
+                $modalContent.css('visibility', 'hidden');
+            }
+            initReplaceChefHeaderControls();
+            if (typeof window.requestAnimationFrame === 'function') {
+                window.requestAnimationFrame(revealModalContent);
+            } else {
+                setTimeout(revealModalContent, 0);
+            }
+        } catch (e) {
+            dialog.find('.modal-content').css('visibility', '');
+        }
 
         // 点击厨师项进行替换
         dialog.on('click', '.replace-chef-item', function() {
