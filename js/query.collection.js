@@ -2284,7 +2284,10 @@
     function evaluateChefCollectionExpectationWithEquip(chef, chefPoolData, areaName, equip, defaultExpectationFloor) {
         var clonedChef = cloneData(chef);
         setChefEquip(clonedChef, equip || null);
-        recalculateChefData(clonedChef, chefPoolData);
+        recalculateChefDataWithOptions(clonedChef, chefPoolData, {
+            equip: equip || null,
+            applyEquip: !!equip
+        });
         clonedChef.__queryAreaName = areaName;
         clonedChef.__queryMeta = getChefMaterialSkillMeta(clonedChef);
         clonedChef.materialExpectation = typeof window.calculateMaterialExpectation === 'function'
@@ -2311,7 +2314,7 @@
         var bestEquipId;
         var bestScore;
 
-        if (!context || !context.applyEquip) {
+        if (!context) {
             return false;
         }
 
@@ -2356,10 +2359,6 @@
         var useLabEquip150 = loadBooleanSetting('useLabEquip150', false);
         var useBeginnerEquip100 = loadBooleanSetting('useBeginnerEquip100', false);
 
-        if (!context.applyEquip) {
-            return false;
-        }
-
         // 150厨具优先
         if (useLabEquip150) {
             var equip150 = getLabEquip150(context, areaName);
@@ -2389,7 +2388,7 @@
         var condSelection = getCondAreaSelection(areaName);
         var equip150;
 
-        if (!context.applyEquip || !loadBooleanSetting('useCondEquip150', false) || !condSelection) {
+        if (!context || !loadBooleanSetting('useCondEquip150', false) || !condSelection) {
             return false;
         }
 
@@ -2411,12 +2410,12 @@
             var applyAmbers = typeof options.applyAmbers === 'boolean'
                 ? options.applyAmbers
                 : chefPoolData.context.applyAmbers;
-            var applyEquip = typeof options.applyEquip === 'boolean'
-                ? options.applyEquip
-                : chefPoolData.context.applyEquip;
             var equip = options.hasOwnProperty('equip')
                 ? options.equip
                 : (chef.equip || null);
+            var applyEquip = typeof options.applyEquip === 'boolean'
+                ? options.applyEquip
+                : (chefPoolData.context.applyEquip || !!equip);
             window.setDataForChef(
                 chef,
                 equip,
