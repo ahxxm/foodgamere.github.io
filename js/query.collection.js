@@ -5862,17 +5862,18 @@
     }
 
     // 菜地区查询：
-    // 先按采集期望优先选人；若最终采集点不足，再做末尾淘汰替换：
-    // 在达到采集点要求的前提下，优先保留更高总期望值；仅在期望值接近时再偏向少超标。
+    // 先保证采集点尽可能达标，再在达标解里选择总期望值更高的组合。
+    // 由于菜地区总采集点可拆为“个人基础采集 + 全队采集加成”的可加模型，
+    // 这里直接做定人数动态规划，避免贪心/单步替换漏掉本可达标的组合。
     function executeVegAreaQuery(areaItem, availableChefs, chefPoolData) {
         var commonFilterSettings = getCollectionCommonFilterSettings();
-        var totalValue = 0;
-        var selectionResult = null;
-        var VEG_REPLACEMENT_OVERFLOW_TOLERANCE = 3;
-
-        function getVegChefKey(chef) {
-            return String(chef && (chef.chefId || chef.id || chef.name) || '');
-        }
+        var vegTarget = getVegTargetConfig(areaItem.name);
+        var dpStates = [];
+        var finalStates = {};
+        var reachableValues = [];
+        var bestState = null;
+        var selected;
+        var selectionResult;
 
         function evaluateVegSelection(selectedCandidates) {
             var result = applyAreaTeamCollectionBonus(selectedCandidates.map(function(item) {
@@ -5883,55 +5884,17 @@
             return result;
         }
 
-        function compareVegReplacementPlan(left, right) {
-            var leftReach = left.totalValue >= areaItem.capacity;
-            var rightReach = right.totalValue >= areaItem.capacity;
-            var leftOverflow = left.overflow || 0;
-            var rightOverflow = right.overflow || 0;
-            var overflowGap = Math.abs(leftOverflow - rightOverflow);
-
-            if (leftReach !== rightReach) {
-                return leftReach ? -1 : 1;
+        function isBetterVegDpState(nextState, currentState) {
+            if (!currentState) {
+                return true;
             }
-
-            if (leftReach && rightReach) {
-                if (right.totalExpectation !== left.totalExpectation) {
-                    if (overflowGap <= VEG_REPLACEMENT_OVERFLOW_TOLERANCE) {
-                        return right.totalExpectation - left.totalExpectation;
-                    }
-                    if (leftOverflow !== rightOverflow) {
-                        return leftOverflow - rightOverflow;
-                    }
-                    return right.totalExpectation - left.totalExpectation;
-                }
-                if (leftOverflow !== rightOverflow) {
-                    return leftOverflow - rightOverflow;
-                }
-                if (left.removeRank !== right.removeRank) {
-                    return left.removeRank - right.removeRank;
-                }
-                if ((right.replacement.expectation || 0) !== (left.replacement.expectation || 0)) {
-                    return (right.replacement.expectation || 0) - (left.replacement.expectation || 0);
-                }
-                if (left.totalValue !== right.totalValue) {
-                    return left.totalValue - right.totalValue;
-                }
-                return (right.replacement.rawValue || 0) - (left.replacement.rawValue || 0);
+            if (nextState.expectation !== currentState.expectation) {
+                return nextState.expectation > currentState.expectation;
             }
-
-            if (right.totalValue !== left.totalValue) {
-                return right.totalValue - left.totalValue;
+            if (nextState.baseRaw !== currentState.baseRaw) {
+                return nextState.baseRaw < currentState.baseRaw;
             }
-            if (right.totalExpectation !== left.totalExpectation) {
-                return right.totalExpectation - left.totalExpectation;
-            }
-            if (left.removeRank !== right.removeRank) {
-                return left.removeRank - right.removeRank;
-            }
-            if ((right.replacement.expectation || 0) !== (left.replacement.expectation || 0)) {
-                return (right.replacement.expectation || 0) - (left.replacement.expectation || 0);
-            }
-            return (right.replacement.rawValue || 0) - (left.replacement.rawValue || 0);
+            return nextState.indices.join(',') < currentState.indices.join(',');
         }
 
         var allCandidates = sortVegCandidates(availableChefs.map(function(chef) {
@@ -5961,81 +5924,125 @@
             clonedChef.__queryMeta = meta;
 
             var metric = getAreaQueryMetric(areaItem, clonedChef);
+            var teamBonus = calculateChefGlobalCollectionBonus(clonedChef, chefPoolData.context);
+            var targetBonusValue = getCollectionBonusValueForKey(teamBonus, vegTarget.key);
 
             return $.extend({
-                chef: clonedChef
+                chef: clonedChef,
+                targetBonusValue: targetBonusValue,
+                selectionValue: metric.rawValue + areaItem.people * targetBonusValue
             }, metric);
         }).filter(function(item) {
             return item.rawValue > 0 && !item.meta.hasRareGuestSkill && !isCollectionChefExcludedByCommonConfig(item.meta, commonFilterSettings);
         }));
-        var selected = allCandidates.slice(0, areaItem.people);
-        selectionResult = evaluateVegSelection(selected);
-        totalValue = selectionResult.totalValue;
 
-        if (totalValue < areaItem.capacity && allCandidates.length > selected.length) {
-            while (totalValue < areaItem.capacity) {
-                var selectedIdMap = {};
-                var remainingCandidates = null;
-                var removableCandidates = null;
-                var bestPlan = null;
-
-                selected.forEach(function(item) {
-                    selectedIdMap[getVegChefKey(item.chef)] = true;
-                });
-                remainingCandidates = allCandidates.filter(function(item) {
-                    return !selectedIdMap[getVegChefKey(item.chef)];
-                });
-
-                if (!remainingCandidates.length) {
-                    break;
-                }
-
-                removableCandidates = selected.slice().sort(function(left, right) {
-                    if (left.expectation !== right.expectation) {
-                        return left.expectation - right.expectation;
-                    }
-                    if (left.rawValue !== right.rawValue) {
-                        return left.rawValue - right.rawValue;
-                    }
-                    return toInt(left.chef.rarity, 0) - toInt(right.chef.rarity, 0);
-                });
-
-                removableCandidates.forEach(function(removeItem, removeRank) {
-                    var removeChefId = getVegChefKey(removeItem.chef);
-
-                    remainingCandidates.forEach(function(replacement) {
-                        var trialSelected = selected.map(function(currentItem) {
-                            return getVegChefKey(currentItem.chef) === removeChefId ? replacement : currentItem;
-                        });
-                        var trialResult = evaluateVegSelection(trialSelected);
-                        var currentPlan = {
-                            removeRank: removeRank,
-                            removed: removeItem,
-                            replacement: replacement,
-                            selected: trialSelected,
-                            result: trialResult,
-                            totalValue: trialResult.totalValue,
-                            totalExpectation: trialResult.totalExpectation,
-                            overflow: Math.max(0, trialResult.totalValue - areaItem.capacity)
-                        };
-
-                        if (!bestPlan || compareVegReplacementPlan(currentPlan, bestPlan) < 0) {
-                            bestPlan = currentPlan;
-                        }
-                    });
-                });
-
-                if (!bestPlan || bestPlan.totalValue <= totalValue) {
-                    break;
-                }
-
-                selected = bestPlan.selected;
-                selectionResult = bestPlan.result;
-                totalValue = bestPlan.totalValue;
-            }
+        if (!allCandidates.length || areaItem.people <= 0) {
+            return evaluateVegSelection([]);
         }
 
-        return selectionResult || evaluateVegSelection(selected);
+        if (allCandidates.length <= areaItem.people) {
+            return evaluateVegSelection(allCandidates);
+        }
+
+        for (var count = 0; count <= areaItem.people; count++) {
+            dpStates[count] = {};
+        }
+        dpStates[0][0] = {
+            expectation: 0,
+            baseRaw: 0,
+            indices: []
+        };
+
+        allCandidates.forEach(function(candidate, index) {
+            var candidateExpectation = Number(candidate.expectation || 0);
+            var candidateBaseRaw = toInt(candidate.rawValue, 0);
+            var candidateSelectionValue = toInt(candidate.selectionValue, 0);
+
+            for (var count = areaItem.people - 1; count >= 0; count--) {
+                Object.keys(dpStates[count]).forEach(function(totalValueKey) {
+                    var currentState = dpStates[count][totalValueKey];
+                    var nextTotalValue = toInt(totalValueKey, 0) + candidateSelectionValue;
+                    var nextState = {
+                        expectation: currentState.expectation + candidateExpectation,
+                        baseRaw: currentState.baseRaw + candidateBaseRaw,
+                        indices: currentState.indices.concat(index)
+                    };
+
+                    if (isBetterVegDpState(nextState, dpStates[count + 1][nextTotalValue])) {
+                        dpStates[count + 1][nextTotalValue] = nextState;
+                    }
+                });
+            }
+        });
+
+        finalStates = dpStates[areaItem.people] || {};
+        reachableValues = Object.keys(finalStates).map(function(key) {
+            return toInt(key, 0);
+        }).sort(function(left, right) {
+            return left - right;
+        });
+
+        reachableValues.forEach(function(totalValue) {
+            var state = finalStates[totalValue];
+            var currentOverflow = Math.max(0, totalValue - areaItem.capacity);
+
+            if (!bestState) {
+                bestState = {
+                    totalValue: totalValue,
+                    overflow: currentOverflow,
+                    expectation: state.expectation,
+                    baseRaw: state.baseRaw,
+                    indices: state.indices
+                };
+                return;
+            }
+
+            if (bestState.totalValue >= areaItem.capacity || totalValue >= areaItem.capacity) {
+                if (bestState.totalValue < areaItem.capacity) {
+                    bestState = {
+                        totalValue: totalValue,
+                        overflow: currentOverflow,
+                        expectation: state.expectation,
+                        baseRaw: state.baseRaw,
+                        indices: state.indices
+                    };
+                    return;
+                }
+                if (state.expectation > bestState.expectation
+                    || (state.expectation === bestState.expectation && currentOverflow < bestState.overflow)
+                    || (state.expectation === bestState.expectation && currentOverflow === bestState.overflow && state.baseRaw < bestState.baseRaw)
+                    || (state.expectation === bestState.expectation && currentOverflow === bestState.overflow && state.baseRaw === bestState.baseRaw && totalValue < bestState.totalValue)) {
+                    bestState = {
+                        totalValue: totalValue,
+                        overflow: currentOverflow,
+                        expectation: state.expectation,
+                        baseRaw: state.baseRaw,
+                        indices: state.indices
+                    };
+                }
+                return;
+            }
+
+            if (totalValue > bestState.totalValue
+                || (totalValue === bestState.totalValue && state.expectation > bestState.expectation)
+                || (totalValue === bestState.totalValue && state.expectation === bestState.expectation && state.baseRaw < bestState.baseRaw)) {
+                bestState = {
+                    totalValue: totalValue,
+                    overflow: currentOverflow,
+                    expectation: state.expectation,
+                    baseRaw: state.baseRaw,
+                    indices: state.indices
+                };
+            }
+        });
+
+        selected = bestState && bestState.indices && bestState.indices.length
+            ? bestState.indices.map(function(index) {
+                return allCandidates[index];
+            })
+            : allCandidates.slice(0, areaItem.people);
+
+        return evaluateVegSelection(selected);
     }
 
     // 根据地区名确定结果卡片里的采集维度高亮。
