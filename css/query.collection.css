@@ -2428,23 +2428,21 @@
 
 #area-config-modal .config-cond-list {
     margin-top: 12px;
-    display: flex !important;
-    flex-wrap: wrap !important;
+    display: grid !important;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
     align-items: flex-start;
     gap: 8px 12px;
 }
 
 #area-config-modal .config-cond-row {
-    width: calc((100% - 12px) / 2);
-    max-width: calc((100% - 12px) / 2);
-    display: inline-flex !important;
-    flex: 0 0 calc((100% - 12px) / 2);
+    width: 100%;
+    max-width: none;
+    display: flex !important;
     flex-direction: row !important;
     align-items: center;
     justify-content: flex-start;
     gap: 8px;
     min-width: 0;
-    vertical-align: top;
 }
 
 #area-config-modal .config-cond-name {
@@ -2460,16 +2458,18 @@
 }
 
 #area-config-modal .config-cond-picker {
-    width: auto !important;
-    max-width: 140px;
-    flex: 0 0 140px;
+    width: 100% !important;
+    max-width: none;
+    min-width: 0;
+    flex: 1 1 auto;
 }
 
 #area-config-modal .config-cond-picker > .dropdown-toggle {
     height: 34px;
     min-height: 34px;
+    width: 100%;
     min-width: 0;
-    max-width: 140px;
+    max-width: none;
     padding: 0 22px 0 10px;
     border-radius: 8px;
     border: 1px solid #d8e2ea;
@@ -2581,9 +2581,6 @@
     }
 
     #area-config-modal .config-cond-row {
-        width: calc((100% - 10px) / 2);
-        max-width: calc((100% - 10px) / 2);
-        flex-basis: calc((100% - 10px) / 2);
         gap: 6px;
     }
 
@@ -2594,12 +2591,10 @@
     }
 
     #area-config-modal .config-cond-picker {
-        max-width: 112px;
-        flex-basis: 112px;
+        min-width: 0;
     }
 
     #area-config-modal .config-cond-picker > .dropdown-toggle {
-        max-width: 112px;
         padding-right: 20px;
         font-size: 11px;
     }

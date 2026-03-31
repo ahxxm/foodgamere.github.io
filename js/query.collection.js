@@ -7687,7 +7687,7 @@
                             return [
                                 '<div class="config-cond-row">',
                                     '<label class="config-cond-name"' + (areaNameColor ? ' style="color:' + areaNameColor + ';"' : '') + '>' + escapeHtml(areaDisplayName) + '</label>',
-                                    '<select class="selectpicker config-cond-select" data-width="fit" data-container="body" data-dropup-auto="false" data-size="8" data-area-name="' + escapeHtml(areaDisplayName) + '" data-previous-value="' + escapeHtml(selectedValue) + '">',
+                                    '<select class="selectpicker config-cond-select" data-width="fit" data-container="body" data-dropup-auto="true" data-size="8" data-area-name="' + escapeHtml(areaDisplayName) + '" data-previous-value="' + escapeHtml(selectedValue) + '">',
                                         optionsHtml,
                                     '</select>',
                                 '</div>'
