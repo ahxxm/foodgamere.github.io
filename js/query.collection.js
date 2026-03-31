@@ -6126,11 +6126,7 @@
         var availableChefs = chefPoolData.chefs.slice();
         var resultMap = {};
         var groupOrder = [];
-        var executionOrder = areaItems.filter(function(item) {
-            return item.prefix === 'cond';
-        }).concat(areaItems.filter(function(item) {
-            return item.prefix !== 'cond';
-        }));
+        var executionOrder = areaItems.slice();
 
         executionOrder.forEach(function(areaItem) {
             var candidates;
