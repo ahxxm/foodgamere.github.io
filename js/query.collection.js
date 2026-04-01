@@ -2862,13 +2862,11 @@
         var ambers;
         var matched = false;
         var originalAmberBySlot = {};
-        var preserveCurrentAmbers = false;
 
         if (!loadBooleanSetting('useCondAutoAmber', false) || !chef || !chef.disk || !Array.isArray(chef.disk.ambers) || !condSelection || !condSelection.field) {
             return false;
         }
 
-        preserveCurrentAmbers = !!(chefPoolData && chefPoolData.context && chefPoolData.context.applyAmbers);
         ambers = getAmberListForContext(chefPoolData.context);
         chef.__autoCondAmberDisp = '';
         chef.__autoAmberRecommendations = [];
@@ -2897,8 +2895,7 @@
             recalculateChefData(slotBaseChef, chefPoolData, true);
             targetBaseValue = getCondFlavorValue(slotBaseChef, condSelection.flavorKey);
 
-            if (preserveCurrentAmbers
-                && currentAmber
+            if (currentAmber
                 && currentAmber.type === slot.type
                 && toInt(currentAmber.rarity, 0) === 3
                 && amberHasCondimentEffect(currentAmber, condSelection.flavorKey)) {
@@ -2935,18 +2932,15 @@
                         ? (amberHasCondimentEffect(currentAmber, condSelection.flavorKey) && toInt(currentAmber.rarity, 0) === 3 ? 'rarity' : 'type')
                         : 'empty'
                 });
-                if (!preserveCurrentAmbers) {
+                if (String(currentAmber && currentAmber.amberId || '') !== String(bestAmber.amberId || '')) {
                     slot.data = bestAmber;
+                    matched = true;
                 }
             }
         });
 
         if (!matched) {
             return false;
-        }
-
-        if (preserveCurrentAmbers) {
-            return chef.__autoAmberRecommendations.length > 0;
         }
 
         chef.__autoCondAmberDisp = chef.disk.ambers.map(function(slot) {
@@ -4444,8 +4438,7 @@
         }, []);
     }
 
-    // 实验室查询自动给红色槽位搭配三星技法类红玉；
-    // 勾选“已配遗玉”时保留当前佩戴，仅生成查询总结建议。
+    // 实验室查询自动给红色槽位搭配三星技法类红玉，并记录实际替换信息。
     function autoApplyLabRedAmberIfNeeded(chef, chefPoolData, areaName) {
         var redSlots;
         var ambers;
@@ -4455,13 +4448,12 @@
         var bestValue;
         var bestAmber = null;
         var originalAmberBySlot = {};
-        var preserveCurrentAmbers = false;
+        var changed = false;
 
         if (!loadBooleanSetting('useLabAutoAmber', false)) {
             return false;
         }
 
-        preserveCurrentAmbers = !!(chefPoolData && chefPoolData.context && chefPoolData.context.applyAmbers);
         redSlots = getChefRedAmberSlotIndices(chef);
         if (redSlots.length === 0) {
             return false;
@@ -4533,15 +4525,22 @@
             return !!item;
         });
 
-        if (preserveCurrentAmbers) {
-            return chef.__autoAmberRecommendations.length > 0;
+        if (!chef.__autoAmberRecommendations.length) {
+            return false;
         }
 
         redSlots.forEach(function(slotIndex) {
             if (chef.disk && chef.disk.ambers && chef.disk.ambers[slotIndex]) {
-                chef.disk.ambers[slotIndex].data = bestAmber;
+                var currentAmber = chef.disk.ambers[slotIndex].data || null;
+                if (String(currentAmber && currentAmber.amberId || '') !== String(bestAmber.amberId || '')) {
+                    chef.disk.ambers[slotIndex].data = bestAmber;
+                    changed = true;
+                }
             }
         });
+        if (!changed) {
+            return false;
+        }
         recalculateChefData(chef, chefPoolData, true);
         chef.__autoLabAmberDisp = redSlots.map(function(slotIndex) {
             var slot = chef.disk && chef.disk.ambers ? chef.disk.ambers[slotIndex] : null;
@@ -4558,7 +4557,6 @@
         var candidateAmbers;
         var areaItem;
         var matched = false;
-        var preserveCurrentAmbers = false;
 
         if (!chef || !chefPoolData || !chefPoolData.context) {
             return false;
@@ -4574,7 +4572,6 @@
             return false;
         }
 
-        preserveCurrentAmbers = !!chefPoolData.context.applyAmbers;
         chef.__autoGreenAmberRecommendations = [];
 
         greenSlots = getChefGreenAmberSlotIndices(chef);
@@ -4653,23 +4650,22 @@
             });
 
             if (bestAmber && chef.disk && Array.isArray(chef.disk.ambers) && chef.disk.ambers[slotIndex]) {
-                if (preserveCurrentAmbers) {
-                    chef.__autoGreenAmberRecommendations.push({
-                        slotIndex: slotIndex,
-                        action: currentAmber ? 'replace' : 'fill',
-                        areaPrefix: areaPrefix,
-                        areaName: areaName,
-                        fromAmberId: currentAmber ? String(currentAmber.amberId || '') : '',
-                        fromAmberName: currentAmber ? String(currentAmber.name || '') : '',
-                        fromAmberRarity: currentAmber ? toInt(currentAmber.rarity, 0) : 0,
-                        toAmberId: String(bestAmber.amberId || ''),
-                        toAmberName: String(bestAmber.name || ''),
-                        toAmberRarity: toInt(bestAmber.rarity, 0),
-                        reason: currentAmber
-                            ? (amberMatchesAreaGreenAutoRule(currentAmber, areaName, areaPrefix) ? 'rarity' : 'type')
-                            : 'empty'
-                    });
-                } else {
+                chef.__autoGreenAmberRecommendations.push({
+                    slotIndex: slotIndex,
+                    action: currentAmber ? 'replace' : 'fill',
+                    areaPrefix: areaPrefix,
+                    areaName: areaName,
+                    fromAmberId: currentAmber ? String(currentAmber.amberId || '') : '',
+                    fromAmberName: currentAmber ? String(currentAmber.name || '') : '',
+                    fromAmberRarity: currentAmber ? toInt(currentAmber.rarity, 0) : 0,
+                    toAmberId: String(bestAmber.amberId || ''),
+                    toAmberName: String(bestAmber.name || ''),
+                    toAmberRarity: toInt(bestAmber.rarity, 0),
+                    reason: currentAmber
+                        ? (amberMatchesAreaGreenAutoRule(currentAmber, areaName, areaPrefix) ? 'rarity' : 'type')
+                        : 'empty'
+                });
+                if (String(currentAmber && currentAmber.amberId || '') !== String(bestAmber.amberId || '')) {
                     chef.disk.ambers[slotIndex].data = bestAmber;
                     recalculateChefData(chef, chefPoolData, true);
                     matched = true;
@@ -4969,6 +4965,33 @@
             return true;
         }
         if (settings.excludeGuestChef && targetMeta.hasChefGuestAppearRateSkill) {
+            return true;
+        }
+        return false;
+    }
+
+    function loadExcludeAuraChefSettingByArea(prefix) {
+        if (prefix === 'veg') {
+            return loadBooleanSetting('useVegExcludeAuraChef', false);
+        }
+        if (prefix === 'jade') {
+            return loadBooleanSetting('useJadeExcludeAuraChef', false);
+        }
+        if (prefix === 'cond') {
+            return loadBooleanSetting('useCondExcludeAuraChef', false);
+        }
+        return false;
+    }
+
+    function isTechniqueAuraChefForCollection(chef, context) {
+        return !!(checkAuraChef(chef, '', context) || {}).isAura;
+    }
+
+    function isCollectionChefExcludedForArea(areaPrefix, chef, meta, context, commonFilterSettings) {
+        if (isCollectionChefExcludedByCommonConfig(meta, commonFilterSettings)) {
+            return true;
+        }
+        if (areaPrefix !== 'lab' && loadExcludeAuraChefSettingByArea(areaPrefix) && isTechniqueAuraChefForCollection(chef, context)) {
             return true;
         }
         return false;
@@ -5881,9 +5904,9 @@
             areaName: areaResult ? areaResult.areaName : '',
             prefix: areaResult ? areaResult.prefix : '',
             equipChanges: [],
-            amberRecommendations: []
+            amberChanges: []
         };
-        var amberRecommendationMap = {};
+        var amberChangeMap = {};
 
         (areaResult && areaResult.chefs || []).forEach(function(chef) {
             if (!chef || isEmptyCollectionChef(chef)) {
@@ -5906,29 +5929,28 @@
                     detail.reason || ''
                 ].join('::');
 
-                if (!amberRecommendationMap[groupKey]) {
-                    amberRecommendationMap[groupKey] = {
+                if (!amberChangeMap[groupKey]) {
+                    amberChangeMap[groupKey] = {
                         chefName: chef.name,
                         detail: {
                             action: detail.action || '',
                             toAmberId: detail.toAmberId || '',
                             toAmberName: detail.toAmberName || '',
-                            reason: detail.reason || '',
                             count: 0,
                             fromAmberNames: []
                         }
                     };
                 }
 
-                amberRecommendationMap[groupKey].detail.count += 1;
+                amberChangeMap[groupKey].detail.count += 1;
                 if (detail.action === 'replace' && detail.fromAmberName) {
-                    amberRecommendationMap[groupKey].detail.fromAmberNames.push(detail.fromAmberName);
+                    amberChangeMap[groupKey].detail.fromAmberNames.push(detail.fromAmberName);
                 }
             });
         });
 
-        summary.amberRecommendations = Object.keys(amberRecommendationMap).map(function(key) {
-            return amberRecommendationMap[key];
+        summary.amberChanges = Object.keys(amberChangeMap).map(function(key) {
+            return amberChangeMap[key];
         });
 
         return summary;
@@ -5975,7 +5997,7 @@
 
         overviewItems.push('<div class="collection-area-summary-overview-item"><span class="collection-area-summary-overview-label">地区</span><span class="collection-area-summary-overview-value">' + escapeHtml(summary.areaName || '-') + '</span></div>');
         overviewItems.push('<div class="collection-area-summary-overview-item"><span class="collection-area-summary-overview-label">厨具替换</span><span class="collection-area-summary-overview-value">' + summary.equipChanges.length + '</span></div>');
-        overviewItems.push('<div class="collection-area-summary-overview-item"><span class="collection-area-summary-overview-label">遗玉建议</span><span class="collection-area-summary-overview-value">' + summary.amberRecommendations.length + '</span></div>');
+        overviewItems.push('<div class="collection-area-summary-overview-item"><span class="collection-area-summary-overview-label">遗玉替换</span><span class="collection-area-summary-overview-value">' + summary.amberChanges.length + '</span></div>');
 
         equipHtml = summary.equipChanges.length ? [
             '<div class="collection-area-summary-section">',
@@ -5989,24 +6011,22 @@
             '</div>'
         ].join('') : '<div class="collection-area-summary-empty">当前没有厨具替换建议</div>';
 
-        amberHtml = summary.amberRecommendations.length ? [
+        amberHtml = summary.amberChanges.length ? [
             '<div class="collection-area-summary-section">',
-                '<div class="collection-area-summary-section-title">遗玉建议</div>',
+                '<div class="collection-area-summary-section-title">遗玉替换</div>',
                 '<div class="collection-area-summary-list">',
-                    summary.amberRecommendations.map(function(item) {
+                    summary.amberChanges.map(function(item) {
                         var detail = item.detail || {};
-                        var reasonText = detail.reason === 'empty'
-                            ? '空位补充'
-                            : (detail.reason === 'rarity' ? '当前遗玉加成较低' : '当前遗玉类型不符');
                         var countText = Number(detail.count || 0) > 1 ? ('*' + Number(detail.count || 0)) : '';
-                        var actionText = detail.action === 'fill'
-                            ? '空位推荐：' + escapeHtml(detail.toAmberName || '') + escapeHtml(countText)
-                            : ('替换推荐：' + escapeHtml(formatRepeatedNames(detail.fromAmberNames || []) || '当前遗玉') + ' -> ' + escapeHtml(detail.toAmberName || '') + escapeHtml(countText) + '（' + escapeHtml(reasonText) + '）');
+                        var actionText = escapeHtml(detail.action === 'fill'
+                            ? ('空位' + countText)
+                            : (formatRepeatedNames(detail.fromAmberNames || []) || '当前遗玉'))
+                            + ' -> ' + escapeHtml(detail.toAmberName || '') + escapeHtml(countText);
                         return '<div class="collection-area-summary-item"><span class="collection-area-summary-chef">' + escapeHtml(item.chefName) + '</span><span class="collection-area-summary-text">' + actionText + '</span></div>';
                     }).join(''),
                 '</div>',
             '</div>'
-        ].join('') : '<div class="collection-area-summary-empty">当前没有遗玉调整建议</div>';
+        ].join('') : '<div class="collection-area-summary-empty">当前没有遗玉替换记录</div>';
 
         return [
             '<div class="collection-area-summary-dialog">',
@@ -6045,6 +6065,7 @@
         var jadeTarget = getJadeTargetConfig(areaItem.name);
         var requiredKeys = jadeTarget.keys;
         var excludeCollectionChef = loadBooleanSetting('useJadeExcludeCollectionChef', false);
+        var commonFilterSettings = getCollectionCommonFilterSettings();
 
         // 预过滤：只保留前两名采集类型与地区要求完全匹配的厨师
         var matchedCount = 0;
@@ -6064,6 +6085,9 @@
             // 重新计算材料技能元数据（含心法盘按地区类型加成）
             clonedChef.__queryAreaName = areaItem.name;
             clonedChef.__queryMeta = getChefMaterialSkillMeta(clonedChef);
+            if (isCollectionChefExcludedForArea(areaItem.prefix, clonedChef, clonedChef.__queryMeta, chefPoolData.context, commonFilterSettings)) {
+                return list;
+            }
             if (excludeCollectionChef && isJadeCollectionChefBySkillOnly(clonedChef)) {
                 return list;
             }
@@ -6280,7 +6304,7 @@
 
         function isCondQueryExcludedChef(item) {
             var meta = item && item.meta ? item.meta : {};
-            return isCollectionChefExcludedByCommonConfig(meta, commonFilterSettings);
+            return isCollectionChefExcludedForArea(areaItem.prefix, item && item.chef, meta, chefPoolData.context, commonFilterSettings);
         }
 
         function buildCondCandidate(chef, phase, options) {
@@ -6564,7 +6588,9 @@
                 selectionValue: metric.rawValue + areaItem.people * targetBonusValue
             }, metric);
         }).filter(function(item) {
-            return item.rawValue > 0 && !item.meta.hasRareGuestSkill && !isCollectionChefExcludedByCommonConfig(item.meta, commonFilterSettings);
+            return item.rawValue > 0
+                && !item.meta.hasRareGuestSkill
+                && !isCollectionChefExcludedForArea(areaItem.prefix, item.chef, item.meta, chefPoolData.context, commonFilterSettings);
         }));
 
         if (!allCandidates.length || areaItem.people <= 0) {
@@ -7797,16 +7823,9 @@
         }
         var availableChefs = chefPoolData.chefs;
 
-        // 过滤掉当前区域已选择的厨师
-        var currentAreaChefNames = currentArea.chefs.filter(function(chef) {
-            return !isEmptyCollectionChef(chef);
-        }).map(function(chef) {
-            return chef.name;
-        });
-
-        var candidateChefs = availableChefs.filter(function(chef) {
-            return currentAreaChefNames.indexOf(chef.name) === -1;
-        });
+        // 替换页展示全部可用厨师；这里只保留通用配置等上游过滤结果，
+        // 当前区域已上阵的厨师也允许再次选择，便于查看完整排序并进行调位。
+        var candidateChefs = availableChefs.slice();
 
         // 显示替换对话框；候选指标改为分页按需计算，避免一次性全量重算卡顿。
         showReplaceChefDialogUI(currentArea, currentChefName, candidateChefs, chefPoolData, assignedMap);
@@ -7941,7 +7960,7 @@
                 cachedCandidateMap[chefKey] = null;
                 return null;
             }
-            if (areaItem.prefix !== 'veg' && areaItem.prefix !== 'jade' && !(metric.rawValue > 0)) {
+            if (areaItem.prefix !== 'veg' && areaItem.prefix !== 'jade' && areaItem.prefix !== 'cond' && !(metric.rawValue > 0)) {
                 cachedCandidateMap[chefKey] = null;
                 return null;
             }
@@ -8094,7 +8113,9 @@
         }
 
         function renderCondSections(items) {
-            var byValue = items.slice().sort(function(left, right) {
+            var byValue = items.filter(function(item) {
+                return item && item.metric && Number(item.metric.rawValue || 0) > 0;
+            }).sort(function(left, right) {
                 if (right.metric.rawValue !== left.metric.rawValue) {
                     return right.metric.rawValue - left.metric.rawValue;
                 }
@@ -8225,6 +8246,15 @@
                 if (!candidateItem) {
                     return false;
                 }
+                if (isCollectionChefExcludedForArea(
+                    areaItem.prefix,
+                    candidateItem.chef,
+                    candidateItem.metric ? candidateItem.metric.meta : null,
+                    chefPoolData.context,
+                    null
+                )) {
+                    return false;
+                }
                 if (shouldHideZeroValueReplaceChef(candidateItem, keyword)) {
                     return false;
                 }
@@ -8266,6 +8296,25 @@
             return toInt(right.chef.rarity, 0) - toInt(left.chef.rarity, 0);
         }
 
+        function compareCondReplaceChefItemsByTab(left, right) {
+            if (activeCondTab === 'expectation') {
+                if ((right.metric.expectation || 0) !== (left.metric.expectation || 0)) {
+                    return (right.metric.expectation || 0) - (left.metric.expectation || 0);
+                }
+                if (right.metric.rawValue !== left.metric.rawValue) {
+                    return right.metric.rawValue - left.metric.rawValue;
+                }
+                return right.metric.score - left.metric.score;
+            }
+            if (right.metric.rawValue !== left.metric.rawValue) {
+                return right.metric.rawValue - left.metric.rawValue;
+            }
+            if ((right.metric.expectation || 0) !== (left.metric.expectation || 0)) {
+                return (right.metric.expectation || 0) - (left.metric.expectation || 0);
+            }
+            return right.metric.score - left.metric.score;
+        }
+
         function sortReplaceChefItems(items) {
             return items.slice().sort(compareReplaceChefItems);
         }
@@ -8282,6 +8331,9 @@
             }
             if (!rightItem) {
                 return -1;
+            }
+            if (areaItem.prefix === 'cond') {
+                return compareCondReplaceChefItemsByTab(leftItem, rightItem);
             }
             return compareReplaceChefItems(leftItem, rightItem);
         }
@@ -8456,6 +8508,7 @@
             dialog.off('shown.bs.tab.replaceChefTabs').on('shown.bs.tab.replaceChefTabs', '.replace-chef-tab-nav a[data-toggle="tab"]', function() {
                 var href = String($(this).attr('href') || '');
                 activeCondTab = href.indexOf('-expectation') >= 0 ? 'expectation' : 'value';
+                refreshReplaceChefPages(true);
             });
 
             $dialogBody.off('click.replaceChefPaging').on('click.replaceChefPaging', '.replace-chef-pagination-btn', function() {
@@ -8625,13 +8678,16 @@
 
         state.queryResults.items.forEach(function(result) {
             var idx;
-            if (sourceAreaResult || !result || result.areaName === currentArea.areaName) {
+            if (sourceAreaResult || !result) {
                 return;
             }
             idx = (result.chefs || []).findIndex(function(chef) {
                 return !isEmptyCollectionChef(chef) && chef.name === newChefName;
             });
             if (idx >= 0) {
+                if (result.areaName === currentArea.areaName && idx === chefIndex) {
+                    return;
+                }
                 sourceAreaResult = result;
                 sourceChefIndex = idx;
             }
@@ -8646,7 +8702,7 @@
         }
 
         refreshCollectionAreaResultState(areaResult, chefPoolData.context);
-        if (sourceAreaResult) {
+        if (sourceAreaResult && sourceAreaResult !== areaResult) {
             refreshCollectionAreaResultState(sourceAreaResult, chefPoolData.context);
         }
 
@@ -9084,6 +9140,7 @@
         var useSilverShoes = loadBooleanSetting('useSilverShoes', false);
         var useGoldenSilkBoots = loadBooleanSetting('useGoldenSilkBoots', false);
         var useVegAutoAmber = loadBooleanSetting('useVegAutoAmber', false);
+        var useVegExcludeAuraChef = loadBooleanSetting('useVegExcludeAuraChef', false);
 
         if (useSilverShoes && useGoldenSilkBoots) {
             useSilverShoes = false;
@@ -9117,7 +9174,16 @@
                             '<span class="config-title">自动搭配心法盘</span>',
                         '</label>',
                     '</div>',
-                    '<div class="config-item-desc"><div>未勾选已配遗玉：按地区自动补齐并校正绿色素材类遗玉。</div><div>勾选已配遗玉：保留当前佩戴，并在查询总结中给出替换/补充建议。</div></div>',
+                    '<div class="config-item-desc"><div>未勾选已配遗玉：按地区自动补齐并校正绿色素材类遗玉。</div><div>勾选已配遗玉：按地区自动替换并补齐绿色素材类遗玉，结果和查询总结都会展示替换内容。</div></div>',
+                '</div>',
+                '<div class="config-item">',
+                    '<div class="config-item-header">',
+                        '<label class="config-label">',
+                            '<input type="checkbox" class="config-checkbox" data-key="useVegExcludeAuraChef"', useVegExcludeAuraChef ? ' checked' : '', '>',
+                            '<span class="config-title">不使用光环厨师</span>',
+                        '</label>',
+                    '</div>',
+                    '<div class="config-item-desc">查询和替换页排除技法加成类光环厨师</div>',
                 '</div>',
             '</div>'
         ].join('');
@@ -9129,6 +9195,7 @@
         var useJadeGoldenSilkBoots = loadBooleanSetting('useJadeGoldenSilkBoots', false);
         var useJadeAutoAmber = loadBooleanSetting('useJadeAutoAmber', false);
         var useJadeExcludeCollectionChef = loadBooleanSetting('useJadeExcludeCollectionChef', false);
+        var useJadeExcludeAuraChef = loadBooleanSetting('useJadeExcludeAuraChef', false);
 
         if (useJadeSilverShoes && useJadeGoldenSilkBoots) {
             useJadeSilverShoes = false;
@@ -9162,7 +9229,7 @@
                             '<span class="config-title">自动搭配心法盘</span>',
                         '</label>',
                     '</div>',
-                    '<div class="config-item-desc"><div>未勾选已配遗玉：按地区自动补齐并校正绿色采集点类遗玉。</div><div>勾选已配遗玉：保留当前佩戴，并在查询总结中给出替换/补充建议。</div></div>',
+                    '<div class="config-item-desc"><div>未勾选已配遗玉：按地区自动补齐并校正绿色采集点类遗玉。</div><div>勾选已配遗玉：按地区自动替换并补齐绿色采集点类遗玉，结果和查询总结都会展示替换内容。</div></div>',
                 '</div>',
                 '<div class="config-item">',
                     '<div class="config-item-header">',
@@ -9173,6 +9240,15 @@
                     '</div>',
                     '<div class="config-item-desc">仅按厨师技能和修炼技能过滤素材加成或暴击类厨师；替换页默认隐藏，但搜索时仍可显示</div>',
                 '</div>',
+                '<div class="config-item">',
+                    '<div class="config-item-header">',
+                        '<label class="config-label">',
+                            '<input type="checkbox" class="config-checkbox" data-key="useJadeExcludeAuraChef"', useJadeExcludeAuraChef ? ' checked' : '', '>',
+                            '<span class="config-title">不使用光环厨师</span>',
+                        '</label>',
+                    '</div>',
+                    '<div class="config-item-desc">查询和替换页排除技法加成类光环厨师</div>',
+                '</div>',
             '</div>'
         ].join('');
     }
@@ -9182,6 +9258,7 @@
         var useCondSilverShoes = loadBooleanSetting('useCondSilverShoes', false);
         var useCondGoldenSilkBoots = loadBooleanSetting('useCondGoldenSilkBoots', false);
         var useCondAutoAmber = loadBooleanSetting('useCondAutoAmber', false);
+        var useCondExcludeAuraChef = loadBooleanSetting('useCondExcludeAuraChef', false);
 
         if (useCondSilverShoes && useCondGoldenSilkBoots) {
             useCondSilverShoes = false;
@@ -9224,7 +9301,16 @@
                             '<span class="config-title">自动搭配心法盘</span>',
                         '</label>',
                     '</div>',
-                    '<div class="config-item-desc"><div>未勾选已配遗玉：按调料类型自动补齐并校正对应遗玉。</div><div>勾选已配遗玉：保留当前佩戴，并在查询总结中给出替换/补充建议。</div></div>',
+                    '<div class="config-item-desc"><div>未勾选已配遗玉：按调料类型自动补齐并校正对应遗玉。</div><div>勾选已配遗玉：按调料类型自动替换并补齐对应遗玉，结果和查询总结都会展示替换内容。</div></div>',
+                '</div>',
+                '<div class="config-item">',
+                    '<div class="config-item-header">',
+                        '<label class="config-label">',
+                            '<input type="checkbox" class="config-checkbox" data-key="useCondExcludeAuraChef"', useCondExcludeAuraChef ? ' checked' : '', '>',
+                            '<span class="config-title">不使用光环厨师</span>',
+                        '</label>',
+                    '</div>',
+                    '<div class="config-item-desc">查询和替换页排除技法加成类光环厨师</div>',
                 '</div>',
                 '<div class="config-item">',
                     '<div class="config-item-header">',
@@ -9306,7 +9392,7 @@
                             '<span class="config-title">自动搭配心法盘</span>',
                         '</label>',
                     '</div>',
-                    '<div class="config-item-desc"><div>未勾选已配遗玉：按地区自动补齐并校正红色技法类遗玉。</div><div>勾选已配遗玉：保留当前佩戴，并在查询总结中给出替换/补充建议。</div></div>',
+                    '<div class="config-item-desc"><div>未勾选已配遗玉：按地区自动补齐并校正红色技法类遗玉。</div><div>勾选已配遗玉：按地区自动替换并补齐红色技法类遗玉，结果和查询总结都会展示替换内容。</div></div>',
                 '</div>',
             '</div>'
         ].join('');
