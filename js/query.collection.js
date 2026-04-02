@@ -3898,6 +3898,223 @@
         areaResult.insufficient = getAssignedChefCount(areaResult.chefs) < areaResult.people || areaResult.totalValue < areaResult.capacity;
     }
 
+    function getVegAreaMaterialType(areaName) {
+        return VEG_AREA_META[areaName] ? String(VEG_AREA_META[areaName].materialType || '') : '';
+    }
+
+    function buildVegCollectionChefResultForArea(baseChef, areaItem, chefPoolData) {
+        var clonedChef;
+        var equipChanged;
+        var metric;
+
+        if (!baseChef || !areaItem || areaItem.prefix !== 'veg' || !chefPoolData || chefPoolData.error) {
+            return null;
+        }
+
+        clonedChef = cloneData(baseChef);
+        clonedChef.__originalEquip = baseChef.__originalEquip;
+        clonedChef.__originalEquipId = baseChef.__originalEquipId;
+        clonedChef.__originalEquipDisp = baseChef.__originalEquipDisp;
+        clonedChef.__originalGreenAmberPreference = baseChef.__originalGreenAmberPreference;
+
+        equipChanged = applyPreferredCollectionEquipIfNeeded(clonedChef, chefPoolData, 'veg', areaItem.name);
+        if (equipChanged) {
+            recalculateChefData(clonedChef, chefPoolData);
+        }
+        autoApplyAreaGreenAmberIfNeeded(clonedChef, chefPoolData, areaItem.name, 'veg');
+
+        if (!isChefAllowedForAreaByOriginalGreenAmber(clonedChef, areaItem.name, 'veg', chefPoolData.context)) {
+            return null;
+        }
+
+        metric = calculateCollectionChefMetric(areaItem, clonedChef);
+        if (!(toInt(metric.rawValue, 0) > 0)) {
+            return null;
+        }
+
+        return buildSelectedCollectionChef({
+            chef: clonedChef,
+            rawValue: metric.rawValue,
+            label: metric.label,
+            detailText: metric.detailText,
+            expectation: metric.expectation,
+            meta: metric.meta
+        }, areaItem);
+    }
+
+    function isBetterVegSwapCandidate(nextCandidate, currentCandidate) {
+        if (!currentCandidate) {
+            return true;
+        }
+        if (nextCandidate.swapExpectationScore !== currentCandidate.swapExpectationScore) {
+            return nextCandidate.swapExpectationScore < currentCandidate.swapExpectationScore;
+        }
+        if (nextCandidate.combinedExpectation !== currentCandidate.combinedExpectation) {
+            return nextCandidate.combinedExpectation > currentCandidate.combinedExpectation;
+        }
+        if (nextCandidate.currentTotalValue !== currentCandidate.currentTotalValue) {
+            return nextCandidate.currentTotalValue > currentCandidate.currentTotalValue;
+        }
+        if (nextCandidate.combinedTotalValue !== currentCandidate.combinedTotalValue) {
+            return nextCandidate.combinedTotalValue > currentCandidate.combinedTotalValue;
+        }
+        return false;
+    }
+
+    function findVegAreaSwapCandidate(previousAreaResult, currentAreaResult, chefPoolData) {
+        var previousAreaItem;
+        var currentAreaItem;
+        var previousChefs;
+        var currentChefs;
+        var bestCandidate = null;
+
+        if (!previousAreaResult || !currentAreaResult || !chefPoolData || chefPoolData.error) {
+            return null;
+        }
+
+        previousAreaItem = createAreaItemFromResult(previousAreaResult);
+        currentAreaItem = createAreaItemFromResult(currentAreaResult);
+        previousChefs = (previousAreaResult.chefs || []).map(function(chef, index) {
+            return {
+                chef: chef,
+                index: index
+            };
+        }).filter(function(item) {
+            return item.chef && !isEmptyCollectionChef(item.chef);
+        }).sort(function(left, right) {
+            if (Number(left.chef.collectionExpectation || 0) !== Number(right.chef.collectionExpectation || 0)) {
+                return Number(left.chef.collectionExpectation || 0) - Number(right.chef.collectionExpectation || 0);
+            }
+            return toInt(left.chef.rawValue, 0) - toInt(right.chef.rawValue, 0);
+        });
+        currentChefs = (currentAreaResult.chefs || []).map(function(chef, index) {
+            return {
+                chef: chef,
+                index: index
+            };
+        }).filter(function(item) {
+            return item.chef && !isEmptyCollectionChef(item.chef);
+        }).sort(function(left, right) {
+            if (Number(left.chef.collectionExpectation || 0) !== Number(right.chef.collectionExpectation || 0)) {
+                return Number(left.chef.collectionExpectation || 0) - Number(right.chef.collectionExpectation || 0);
+            }
+            return toInt(left.chef.rawValue, 0) - toInt(right.chef.rawValue, 0);
+        });
+
+        previousChefs.forEach(function(previousItem) {
+            var previousBaseChef = getCollectionChefFromPool(previousItem.chef.id, previousItem.chef.name, chefPoolData);
+            if (!previousBaseChef) {
+                return;
+            }
+
+            currentChefs.forEach(function(currentItem) {
+                var currentBaseChef = getCollectionChefFromPool(currentItem.chef.id, currentItem.chef.name, chefPoolData);
+                var nextCurrentChefResult;
+                var nextPreviousChefResult;
+                var nextCurrentAreaResult;
+                var nextPreviousAreaResult;
+                var candidate;
+
+                if (!currentBaseChef) {
+                    return;
+                }
+
+                nextCurrentChefResult = buildVegCollectionChefResultForArea(previousBaseChef, currentAreaItem, chefPoolData);
+                nextPreviousChefResult = buildVegCollectionChefResultForArea(currentBaseChef, previousAreaItem, chefPoolData);
+                if (!nextCurrentChefResult || !nextPreviousChefResult) {
+                    return;
+                }
+
+                nextCurrentAreaResult = cloneData(currentAreaResult);
+                nextPreviousAreaResult = cloneData(previousAreaResult);
+                nextCurrentAreaResult.chefs[currentItem.index] = nextCurrentChefResult;
+                nextPreviousAreaResult.chefs[previousItem.index] = nextPreviousChefResult;
+                updateAreaResultSummary(nextCurrentAreaResult, chefPoolData);
+                updateAreaResultSummary(nextPreviousAreaResult, chefPoolData);
+
+                if (nextCurrentAreaResult.insufficient || nextPreviousAreaResult.insufficient) {
+                    return;
+                }
+
+                candidate = {
+                    currentAreaResult: nextCurrentAreaResult,
+                    previousAreaResult: nextPreviousAreaResult,
+                    swapExpectationScore: Number(previousItem.chef.collectionExpectation || 0) + Number(currentItem.chef.collectionExpectation || 0),
+                    combinedExpectation: getAreaTotalCollectionExpectation(nextCurrentAreaResult.chefs) + getAreaTotalCollectionExpectation(nextPreviousAreaResult.chefs),
+                    currentTotalValue: toInt(nextCurrentAreaResult.totalValue, 0),
+                    combinedTotalValue: toInt(nextCurrentAreaResult.totalValue, 0) + toInt(nextPreviousAreaResult.totalValue, 0)
+                };
+
+                if (isBetterVegSwapCandidate(candidate, bestCandidate)) {
+                    bestCandidate = candidate;
+                }
+            });
+        });
+
+        return bestCandidate;
+    }
+
+    function tryRebalanceVegAreaResult(results, currentIndex, chefPoolData) {
+        var currentAreaResult = results[currentIndex];
+        var currentAreaType;
+        var previousIndex;
+        var previousAreaResult;
+        var swapCandidate;
+
+        if (!currentAreaResult || currentAreaResult.prefix !== 'veg' || !currentAreaResult.insufficient) {
+            return false;
+        }
+        if (getAssignedChefCount(currentAreaResult.chefs) < currentAreaResult.people) {
+            return false;
+        }
+
+        currentAreaType = getVegAreaMaterialType(currentAreaResult.areaName);
+        if (!currentAreaType) {
+            return false;
+        }
+
+        for (previousIndex = currentIndex - 1; previousIndex >= 0; previousIndex--) {
+            previousAreaResult = results[previousIndex];
+            if (!previousAreaResult || previousAreaResult.prefix !== 'veg') {
+                continue;
+            }
+            if (getVegAreaMaterialType(previousAreaResult.areaName) !== currentAreaType) {
+                continue;
+            }
+            if (getAssignedChefCount(previousAreaResult.chefs) < previousAreaResult.people) {
+                continue;
+            }
+
+            swapCandidate = findVegAreaSwapCandidate(previousAreaResult, currentAreaResult, chefPoolData);
+            if (!swapCandidate) {
+                continue;
+            }
+
+            results[currentIndex] = swapCandidate.currentAreaResult;
+            results[previousIndex] = swapCandidate.previousAreaResult;
+            return true;
+        }
+
+        return false;
+    }
+
+    function rebalanceVegAreaResults(results, chefPoolData) {
+        if (!Array.isArray(results) || !results.length || !chefPoolData || chefPoolData.error) {
+            return;
+        }
+
+        results.forEach(function(result) {
+            updateAreaResultSummary(result, chefPoolData);
+        });
+
+        results.forEach(function(result, index) {
+            if (!result || result.prefix !== 'veg' || !result.insufficient) {
+                return;
+            }
+            tryRebalanceVegAreaResult(results, index, chefPoolData);
+        });
+    }
+
     function updateCollectionChefEquip(areaName, chefId, chefName, equipId) {
         if (state.queryLoading) {
             return;
@@ -4677,6 +4894,425 @@
         });
 
         return matched;
+    }
+
+    function amberHasVegCollectionEffect(amber, areaName) {
+        var vegTarget = getVegTargetConfig(areaName);
+        var effectType = getCollectionValueEffectType(vegTarget.key);
+
+        if (!amber || amber.type !== 2 || !effectType) {
+            return false;
+        }
+
+        return amberHasAnyEffectType(amber, [effectType]);
+    }
+
+    function hasChefOriginalTechniqueGreenAmber(chef) {
+        var preference = getChefOriginalGreenAmberPreference(chef);
+        return !!(preference && preference.jadeKeyCount > 0);
+    }
+
+    function canChefOverrideOriginalGreenAmberForVegSupplement(chef) {
+        var disk;
+        var levelIndex;
+        var hasRelevantEquippedAmber = false;
+        var hasInvalidEquippedAmber = false;
+        var hasNonOneStarEquippedAmber = false;
+
+        if (!chef || !chef.disk || !Array.isArray(chef.disk.ambers)) {
+            return false;
+        }
+
+        disk = chef.disk || {};
+        levelIndex = Math.max(0, toInt(disk.level, 1) - 1);
+
+        disk.ambers.forEach(function(slot) {
+            var amber;
+            var effects;
+            var hasRelevantEffect = false;
+
+            if (!slot || slot.type !== 2) {
+                return;
+            }
+
+            amber = slot.__originalData || slot.data || null;
+            if (!amber) {
+                return;
+            }
+
+            if (toInt(amber.rarity, 0) !== 1) {
+                hasNonOneStarEquippedAmber = true;
+                return;
+            }
+
+            effects = Array.isArray(amber.allEffect) ? (amber.allEffect[levelIndex] || []) : [];
+            hasRelevantEffect = (effects || []).some(function(effect) {
+                return !!getGreenAmberPreferenceMaterialType(effect && effect.type)
+                    || !!getGreenAmberPreferenceValueKey(effect && effect.type);
+            });
+
+            if (!hasRelevantEffect) {
+                hasInvalidEquippedAmber = true;
+                return;
+            }
+
+            hasRelevantEquippedAmber = true;
+        });
+
+        return hasRelevantEquippedAmber && !hasInvalidEquippedAmber && !hasNonOneStarEquippedAmber;
+    }
+
+    function autoApplyVegTechniqueAmberByRarity(chef, chefPoolData, areaName, amberRarity) {
+        var greenSlots;
+        var ambers;
+        var candidateAmbers;
+        var areaItem;
+        var changed = false;
+
+        if (!chef || !chefPoolData || !chefPoolData.context) {
+            return false;
+        }
+
+        greenSlots = getChefGreenAmberSlotIndices(chef);
+        if (!greenSlots.length) {
+            return false;
+        }
+
+        ambers = getAmberListForContext(chefPoolData.context);
+        candidateAmbers = ambers.filter(function(amber) {
+            return !!amber
+                && amber.type === 2
+                && toInt(amber.rarity, 0) === toInt(amberRarity, 0)
+                && amberHasVegCollectionEffect(amber, areaName);
+        });
+        if (!candidateAmbers.length) {
+            return false;
+        }
+
+        areaItem = {
+            name: areaName,
+            prefix: 'veg',
+            people: 0,
+            capacity: 0
+        };
+        chef.__autoGreenAmberRecommendations = [];
+        recalculateChefData(chef, chefPoolData, true);
+
+        greenSlots.forEach(function(slotIndex) {
+            var currentSlot = chef.disk && Array.isArray(chef.disk.ambers) ? chef.disk.ambers[slotIndex] : null;
+            var currentAmber = currentSlot && currentSlot.data ? currentSlot.data : null;
+            var baseMetric = calculateCollectionChefMetric(areaItem, chef);
+            var bestAmber = null;
+            var bestRawValue = Number(baseMetric.rawValue || 0);
+            var bestExpectation = Number(baseMetric.expectation || 0);
+
+            candidateAmbers.forEach(function(amber) {
+                var trialChef = cloneData(chef);
+                var trialMetric;
+                var trialRawValue;
+                var trialExpectation;
+
+                if (!trialChef.disk || !Array.isArray(trialChef.disk.ambers) || !trialChef.disk.ambers[slotIndex]) {
+                    return;
+                }
+
+                trialChef.disk.ambers[slotIndex].data = amber;
+                recalculateChefData(trialChef, chefPoolData, true);
+                trialMetric = calculateCollectionChefMetric(areaItem, trialChef);
+                trialRawValue = Number(trialMetric.rawValue || 0);
+                trialExpectation = Number(trialMetric.expectation || 0);
+
+                if (trialRawValue > bestRawValue
+                    || (trialRawValue === bestRawValue && trialExpectation > bestExpectation)) {
+                    bestAmber = amber;
+                    bestRawValue = trialRawValue;
+                    bestExpectation = trialExpectation;
+                }
+            });
+
+            if (bestAmber && chef.disk && Array.isArray(chef.disk.ambers) && chef.disk.ambers[slotIndex]) {
+                chef.__autoGreenAmberRecommendations.push({
+                    slotIndex: slotIndex,
+                    action: currentAmber ? 'replace' : 'fill',
+                    areaPrefix: 'veg',
+                    areaName: areaName,
+                    fromAmberId: currentAmber ? String(currentAmber.amberId || '') : '',
+                    fromAmberName: currentAmber ? String(currentAmber.name || '') : '',
+                    fromAmberRarity: currentAmber ? toInt(currentAmber.rarity, 0) : 0,
+                    toAmberId: String(bestAmber.amberId || ''),
+                    toAmberName: String(bestAmber.name || ''),
+                    toAmberRarity: toInt(bestAmber.rarity, 0),
+                    reason: 'supplement-technique'
+                });
+                if (String(currentAmber && currentAmber.amberId || '') !== String(bestAmber.amberId || '')) {
+                    chef.disk.ambers[slotIndex].data = bestAmber;
+                    recalculateChefData(chef, chefPoolData, true);
+                    changed = true;
+                }
+            }
+        });
+
+        return changed;
+    }
+
+    function buildVegTechniqueAmberChefResultForArea(baseChef, areaItem, chefPoolData, amberRarity) {
+        var clonedChef;
+        var equipChanged;
+        var amberChanged;
+        var metric;
+
+        if (!baseChef || !areaItem || areaItem.prefix !== 'veg' || !chefPoolData || chefPoolData.error) {
+            return null;
+        }
+
+        clonedChef = cloneData(baseChef);
+        clonedChef.__originalEquip = baseChef.__originalEquip;
+        clonedChef.__originalEquipId = baseChef.__originalEquipId;
+        clonedChef.__originalEquipDisp = baseChef.__originalEquipDisp;
+        clonedChef.__originalGreenAmberPreference = baseChef.__originalGreenAmberPreference;
+
+        equipChanged = applyPreferredCollectionEquipIfNeeded(clonedChef, chefPoolData, 'veg', areaItem.name);
+        if (equipChanged) {
+            recalculateChefData(clonedChef, chefPoolData);
+        }
+        amberChanged = autoApplyVegTechniqueAmberByRarity(clonedChef, chefPoolData, areaItem.name, amberRarity);
+        if (!amberChanged) {
+            return null;
+        }
+
+        if (!isChefAllowedForAreaByOriginalGreenAmber(clonedChef, areaItem.name, 'veg', chefPoolData.context)
+            && !canChefOverrideOriginalGreenAmberForVegSupplement(baseChef)) {
+            return null;
+        }
+
+        metric = calculateCollectionChefMetric(areaItem, clonedChef);
+        if (!(toInt(metric.rawValue, 0) > 0)) {
+            return null;
+        }
+
+        return buildSelectedCollectionChef({
+            chef: clonedChef,
+            rawValue: metric.rawValue,
+            label: metric.label,
+            detailText: metric.detailText,
+            expectation: metric.expectation,
+            meta: metric.meta
+        }, areaItem);
+    }
+
+    function getVegSupplementRemovalOrder(selectedChefs) {
+        var candidateIndices = [];
+
+        (selectedChefs || []).forEach(function(item, index) {
+            if (!item || isEmptyCollectionChef(item)) {
+                return;
+            }
+            if (toInt(item.greenAmberCount, 0) <= 0) {
+                candidateIndices.push(index);
+            }
+        });
+
+        if (!candidateIndices.length) {
+            (selectedChefs || []).forEach(function(item, index) {
+                if (!item || isEmptyCollectionChef(item)) {
+                    return;
+                }
+                candidateIndices.push(index);
+            });
+        }
+
+        if (!candidateIndices.length) {
+            return [];
+        }
+
+        candidateIndices.sort(function(leftIndex, rightIndex) {
+            var left = selectedChefs[leftIndex];
+            var right = selectedChefs[rightIndex];
+            if (toInt(left.rawValue, 0) !== toInt(right.rawValue, 0)) {
+                return toInt(left.rawValue, 0) - toInt(right.rawValue, 0);
+            }
+            if (Number(left.collectionExpectation || 0) !== Number(right.collectionExpectation || 0)) {
+                return Number(left.collectionExpectation || 0) - Number(right.collectionExpectation || 0);
+            }
+            return String(left.id || left.name || '').localeCompare(String(right.id || right.name || ''));
+        });
+
+        return candidateIndices;
+    }
+
+    function pickVegSupplementRemovalIndex(selectedChefs) {
+        var removalOrder = getVegSupplementRemovalOrder(selectedChefs);
+        return removalOrder.length ? removalOrder[0] : -1;
+    }
+
+    function isBetterVegSupplementResult(nextResult, currentResult, areaItem) {
+        var nextOverflow;
+        var currentOverflow;
+
+        if (!currentResult) {
+            return true;
+        }
+
+        nextOverflow = Math.max(0, toInt(nextResult.totalValue, 0) - toInt(areaItem.capacity, 0));
+        currentOverflow = Math.max(0, toInt(currentResult.totalValue, 0) - toInt(areaItem.capacity, 0));
+
+        if (nextOverflow !== currentOverflow) {
+            return nextOverflow < currentOverflow;
+        }
+        if (Number(nextResult.totalExpectation || 0) !== Number(currentResult.totalExpectation || 0)) {
+            return Number(nextResult.totalExpectation || 0) > Number(currentResult.totalExpectation || 0);
+        }
+        if (toInt(nextResult.totalValue, 0) !== toInt(currentResult.totalValue, 0)) {
+            return toInt(nextResult.totalValue, 0) > toInt(currentResult.totalValue, 0);
+        }
+        return false;
+    }
+
+    function evaluateVegSupplementSelection(selectedChefs, areaItem, chefPoolData) {
+        var evaluatedResult = applyAreaTeamCollectionBonus(selectedChefs, areaItem, chefPoolData.context);
+        evaluatedResult.totalExpectation = getAreaTotalCollectionExpectation(evaluatedResult.selected);
+        return evaluatedResult;
+    }
+
+    function findBestVegDoubleSupplementResult(selectedChefs, candidateEntries, areaItem, chefPoolData, rarity) {
+        var removalOrder = getVegSupplementRemovalOrder(selectedChefs);
+        var bestResult = null;
+
+        if (removalOrder.length < 2 || !Array.isArray(candidateEntries) || candidateEntries.length < 2) {
+            return null;
+        }
+
+        for (var leftIndex = 0; leftIndex < removalOrder.length - 1; leftIndex++) {
+            for (var rightIndex = leftIndex + 1; rightIndex < removalOrder.length; rightIndex++) {
+                var firstRemovalIndex = removalOrder[leftIndex];
+                var secondRemovalIndex = removalOrder[rightIndex];
+                var retainedChefs = (selectedChefs || []).filter(function(item, index) {
+                    return index !== firstRemovalIndex && index !== secondRemovalIndex && item && !isEmptyCollectionChef(item);
+                });
+
+                for (var firstCandidateIndex = 0; firstCandidateIndex < candidateEntries.length - 1; firstCandidateIndex++) {
+                    for (var secondCandidateIndex = firstCandidateIndex + 1; secondCandidateIndex < candidateEntries.length; secondCandidateIndex++) {
+                        var firstCandidate = candidateEntries[firstCandidateIndex];
+                        var secondCandidate = candidateEntries[secondCandidateIndex];
+                        var nextSelection;
+                        var evaluatedResult;
+
+                        if (!firstCandidate || !secondCandidate || firstCandidate.chefKey === secondCandidate.chefKey) {
+                            continue;
+                        }
+
+                        nextSelection = cloneData(retainedChefs);
+                        nextSelection.push(cloneData(firstCandidate.result));
+                        nextSelection.push(cloneData(secondCandidate.result));
+                        evaluatedResult = evaluateVegSupplementSelection(nextSelection, areaItem, chefPoolData);
+
+                        if (getAssignedChefCount(evaluatedResult.selected) < areaItem.people
+                            || toInt(evaluatedResult.totalValue, 0) < toInt(areaItem.capacity, 0)) {
+                            continue;
+                        }
+
+                        if (isBetterVegSupplementResult(evaluatedResult, bestResult, areaItem)) {
+                            bestResult = evaluatedResult;
+                        }
+                    }
+                }
+            }
+        }
+        return bestResult;
+    }
+
+    function trySupplementVegSelectionWithTechniqueAmber(selectionResult, areaItem, availableChefs, chefPoolData) {
+        var removalIndex;
+        var retainedChefs;
+        var selectedIdMap = {};
+        var rarity;
+        var removalOrder;
+
+        if (!selectionResult || !Array.isArray(selectionResult.selected) || !selectionResult.selected.length) {
+            return selectionResult;
+        }
+        if (!chefPoolData || chefPoolData.error || !chefPoolData.context || !chefPoolData.context.applyAmbers || !loadBooleanSetting('useVegAutoAmber', false)) {
+            return selectionResult;
+        }
+        if (getAssignedChefCount(selectionResult.selected) < areaItem.people || toInt(selectionResult.totalValue, 0) >= toInt(areaItem.capacity, 0)) {
+            return selectionResult;
+        }
+
+        removalOrder = getVegSupplementRemovalOrder(selectionResult.selected);
+        removalIndex = removalOrder.length ? removalOrder[0] : -1;
+        if (removalIndex < 0) {
+            return selectionResult;
+        }
+
+        retainedChefs = selectionResult.selected.filter(function(item, index) {
+            return index !== removalIndex && item && !isEmptyCollectionChef(item);
+        });
+        selectionResult.selected.forEach(function(item) {
+            if (!item || isEmptyCollectionChef(item)) {
+                return;
+            }
+            selectedIdMap[String(item.id || item.name || '')] = true;
+        });
+
+        for (rarity = 1; rarity <= 3; rarity++) {
+            var bestSupplementResult = null;
+            var candidateEntries = [];
+
+            (availableChefs || []).forEach(function(chef) {
+                var chefKey = String(chef && (chef.chefId || chef.id || chef.name) || '');
+                var candidateResult;
+                var nextSelection;
+                var evaluatedResult;
+                var skipReason = '';
+
+                if (!chef || !chefKey) {
+                    skipReason = 'invalid-chef';
+                } else if (selectedIdMap[chefKey]) {
+                    skipReason = 'already-selected';
+                } else if (hasChefOriginalTechniqueGreenAmber(chef) && !canChefOverrideOriginalGreenAmberForVegSupplement(chef)) {
+                    skipReason = 'has-original-technique-green-amber';
+                }
+                if (skipReason) {
+                    return;
+                }
+                if (!getChefGreenAmberSlotIndices(chef).length) {
+                    return;
+                }
+
+                candidateResult = buildVegTechniqueAmberChefResultForArea(chef, areaItem, chefPoolData, rarity);
+                if (!candidateResult) {
+                    return;
+                }
+
+                candidateEntries.push({
+                    chefKey: chefKey,
+                    chefName: chef.name,
+                    result: candidateResult
+                });
+
+                nextSelection = cloneData(retainedChefs);
+                nextSelection.push(candidateResult);
+                evaluatedResult = evaluateVegSupplementSelection(nextSelection, areaItem, chefPoolData);
+
+                if (getAssignedChefCount(evaluatedResult.selected) < areaItem.people || toInt(evaluatedResult.totalValue, 0) < toInt(areaItem.capacity, 0)) {
+                    return;
+                }
+
+                if (isBetterVegSupplementResult(evaluatedResult, bestSupplementResult, areaItem)) {
+                    bestSupplementResult = evaluatedResult;
+                }
+            });
+
+            if (bestSupplementResult) {
+                return bestSupplementResult;
+            }
+            bestSupplementResult = findBestVegDoubleSupplementResult(selectionResult.selected, candidateEntries, areaItem, chefPoolData, rarity);
+            if (bestSupplementResult) {
+                return bestSupplementResult;
+            }
+        }
+
+        return selectionResult;
     }
 
     // 汇总厨师素材相关元数据：
@@ -5536,6 +6172,18 @@
             return false;
         }
         return areaPrefix === 'veg' || areaPrefix === 'jade';
+    }
+
+    function hasChefOriginalTechniqueOnlyGreenAmber(chef) {
+        var preference = getChefOriginalGreenAmberPreference(chef);
+        return !!(preference && preference.jadeKeyCount > 0 && preference.materialTypeCount === 0);
+    }
+
+    function shouldDelayVegTechniqueAmberChef(chef, queryContext) {
+        if (!queryContext || !queryContext.applyAmbers || !loadBooleanSetting('useVegAutoAmber', false)) {
+            return false;
+        }
+        return hasChefOriginalTechniqueOnlyGreenAmber(chef);
     }
 
     function isChefAllowedForAreaByOriginalGreenAmber(chef, areaName, areaPrefix, queryContext) {
@@ -6708,12 +7356,9 @@
     function executeVegAreaQuery(areaItem, availableChefs, chefPoolData) {
         var commonFilterSettings = getCollectionCommonFilterSettings();
         var vegTarget = getVegTargetConfig(areaItem.name);
-        var dpStates = [];
-        var finalStates = {};
-        var reachableValues = [];
-        var bestState = null;
         var selected;
-        var selectionResult;
+        var allCandidates;
+        var preferredCandidates;
 
         function evaluateVegSelection(selectedCandidates) {
             var result = applyAreaTeamCollectionBonus(selectedCandidates.map(function(item) {
@@ -6737,7 +7382,122 @@
             return nextState.indices.join(',') < currentState.indices.join(',');
         }
 
-        var allCandidates = sortVegCandidates(availableChefs.map(function(chef) {
+        function solveVegSelection(candidates) {
+            var dpStates = [];
+            var finalStates = {};
+            var reachableValues = [];
+            var bestState = null;
+
+            if (!candidates.length || areaItem.people <= 0) {
+                return evaluateVegSelection([]);
+            }
+
+            if (candidates.length <= areaItem.people) {
+                return evaluateVegSelection(candidates);
+            }
+
+            for (var count = 0; count <= areaItem.people; count++) {
+                dpStates[count] = {};
+            }
+            dpStates[0][0] = {
+                expectation: 0,
+                baseRaw: 0,
+                indices: []
+            };
+
+            candidates.forEach(function(candidate, index) {
+                var candidateExpectation = Number(candidate.expectation || 0);
+                var candidateBaseRaw = toInt(candidate.rawValue, 0);
+                var candidateSelectionValue = toInt(candidate.selectionValue, 0);
+
+                for (var count = areaItem.people - 1; count >= 0; count--) {
+                    Object.keys(dpStates[count]).forEach(function(totalValueKey) {
+                        var currentState = dpStates[count][totalValueKey];
+                        var nextTotalValue = toInt(totalValueKey, 0) + candidateSelectionValue;
+                        var nextState = {
+                            expectation: currentState.expectation + candidateExpectation,
+                            baseRaw: currentState.baseRaw + candidateBaseRaw,
+                            indices: currentState.indices.concat(index)
+                        };
+
+                        if (isBetterVegDpState(nextState, dpStates[count + 1][nextTotalValue])) {
+                            dpStates[count + 1][nextTotalValue] = nextState;
+                        }
+                    });
+                }
+            });
+
+            finalStates = dpStates[areaItem.people] || {};
+            reachableValues = Object.keys(finalStates).map(function(key) {
+                return toInt(key, 0);
+            }).sort(function(left, right) {
+                return left - right;
+            });
+
+            reachableValues.forEach(function(totalValue) {
+                var state = finalStates[totalValue];
+                var currentOverflow = Math.max(0, totalValue - areaItem.capacity);
+
+                if (!bestState) {
+                    bestState = {
+                        totalValue: totalValue,
+                        overflow: currentOverflow,
+                        expectation: state.expectation,
+                        baseRaw: state.baseRaw,
+                        indices: state.indices
+                    };
+                    return;
+                }
+
+                if (bestState.totalValue >= areaItem.capacity || totalValue >= areaItem.capacity) {
+                    if (bestState.totalValue < areaItem.capacity) {
+                        bestState = {
+                            totalValue: totalValue,
+                            overflow: currentOverflow,
+                            expectation: state.expectation,
+                            baseRaw: state.baseRaw,
+                            indices: state.indices
+                        };
+                        return;
+                    }
+                    if (state.expectation > bestState.expectation
+                        || (state.expectation === bestState.expectation && currentOverflow < bestState.overflow)
+                        || (state.expectation === bestState.expectation && currentOverflow === bestState.overflow && state.baseRaw < bestState.baseRaw)
+                        || (state.expectation === bestState.expectation && currentOverflow === bestState.overflow && state.baseRaw === bestState.baseRaw && totalValue < bestState.totalValue)) {
+                        bestState = {
+                            totalValue: totalValue,
+                            overflow: currentOverflow,
+                            expectation: state.expectation,
+                            baseRaw: state.baseRaw,
+                            indices: state.indices
+                        };
+                    }
+                    return;
+                }
+
+                if (totalValue > bestState.totalValue
+                    || (totalValue === bestState.totalValue && state.expectation > bestState.expectation)
+                    || (totalValue === bestState.totalValue && state.expectation === bestState.expectation && state.baseRaw < bestState.baseRaw)) {
+                    bestState = {
+                        totalValue: totalValue,
+                        overflow: currentOverflow,
+                        expectation: state.expectation,
+                        baseRaw: state.baseRaw,
+                        indices: state.indices
+                    };
+                }
+            });
+
+            selected = bestState && bestState.indices && bestState.indices.length
+                ? bestState.indices.map(function(index) {
+                    return candidates[index];
+                })
+                : candidates.slice(0, areaItem.people);
+
+            return evaluateVegSelection(selected);
+        }
+
+        allCandidates = sortVegCandidates(availableChefs.map(function(chef) {
             // 克隆厨师对象，避免影响其他区域的查询
             var clonedChef = cloneData(chef);
             
@@ -6745,6 +7505,7 @@
             clonedChef.__originalEquip = chef.__originalEquip;
             clonedChef.__originalEquipId = chef.__originalEquipId;
             clonedChef.__originalEquipDisp = chef.__originalEquipDisp;
+            clonedChef.__originalGreenAmberPreference = chef.__originalGreenAmberPreference;
 
             // 应用银布鞋配置
             var equipChanged = applyPreferredCollectionEquipIfNeeded(clonedChef, chefPoolData, 'veg', areaItem.name);
@@ -6783,109 +7544,23 @@
             return evaluateVegSelection([]);
         }
 
-        if (allCandidates.length <= areaItem.people) {
-            return evaluateVegSelection(allCandidates);
+        preferredCandidates = allCandidates.filter(function(item) {
+            return !shouldDelayVegTechniqueAmberChef(item.chef, chefPoolData.context);
+        });
+
+        if (preferredCandidates.length && preferredCandidates.length < allCandidates.length) {
+            var preferredResult = solveVegSelection(preferredCandidates);
+            if (getAssignedChefCount(preferredResult.selected) >= areaItem.people && toInt(preferredResult.totalValue, 0) >= areaItem.capacity) {
+                return preferredResult;
+            }
         }
 
-        for (var count = 0; count <= areaItem.people; count++) {
-            dpStates[count] = {};
-        }
-        dpStates[0][0] = {
-            expectation: 0,
-            baseRaw: 0,
-            indices: []
-        };
-
-        allCandidates.forEach(function(candidate, index) {
-            var candidateExpectation = Number(candidate.expectation || 0);
-            var candidateBaseRaw = toInt(candidate.rawValue, 0);
-            var candidateSelectionValue = toInt(candidate.selectionValue, 0);
-
-            for (var count = areaItem.people - 1; count >= 0; count--) {
-                Object.keys(dpStates[count]).forEach(function(totalValueKey) {
-                    var currentState = dpStates[count][totalValueKey];
-                    var nextTotalValue = toInt(totalValueKey, 0) + candidateSelectionValue;
-                    var nextState = {
-                        expectation: currentState.expectation + candidateExpectation,
-                        baseRaw: currentState.baseRaw + candidateBaseRaw,
-                        indices: currentState.indices.concat(index)
-                    };
-
-                    if (isBetterVegDpState(nextState, dpStates[count + 1][nextTotalValue])) {
-                        dpStates[count + 1][nextTotalValue] = nextState;
-                    }
-                });
-            }
-        });
-
-        finalStates = dpStates[areaItem.people] || {};
-        reachableValues = Object.keys(finalStates).map(function(key) {
-            return toInt(key, 0);
-        }).sort(function(left, right) {
-            return left - right;
-        });
-
-        reachableValues.forEach(function(totalValue) {
-            var state = finalStates[totalValue];
-            var currentOverflow = Math.max(0, totalValue - areaItem.capacity);
-
-            if (!bestState) {
-                bestState = {
-                    totalValue: totalValue,
-                    overflow: currentOverflow,
-                    expectation: state.expectation,
-                    baseRaw: state.baseRaw,
-                    indices: state.indices
-                };
-                return;
-            }
-
-            if (bestState.totalValue >= areaItem.capacity || totalValue >= areaItem.capacity) {
-                if (bestState.totalValue < areaItem.capacity) {
-                    bestState = {
-                        totalValue: totalValue,
-                        overflow: currentOverflow,
-                        expectation: state.expectation,
-                        baseRaw: state.baseRaw,
-                        indices: state.indices
-                    };
-                    return;
-                }
-                if (state.expectation > bestState.expectation
-                    || (state.expectation === bestState.expectation && currentOverflow < bestState.overflow)
-                    || (state.expectation === bestState.expectation && currentOverflow === bestState.overflow && state.baseRaw < bestState.baseRaw)
-                    || (state.expectation === bestState.expectation && currentOverflow === bestState.overflow && state.baseRaw === bestState.baseRaw && totalValue < bestState.totalValue)) {
-                    bestState = {
-                        totalValue: totalValue,
-                        overflow: currentOverflow,
-                        expectation: state.expectation,
-                        baseRaw: state.baseRaw,
-                        indices: state.indices
-                    };
-                }
-                return;
-            }
-
-            if (totalValue > bestState.totalValue
-                || (totalValue === bestState.totalValue && state.expectation > bestState.expectation)
-                || (totalValue === bestState.totalValue && state.expectation === bestState.expectation && state.baseRaw < bestState.baseRaw)) {
-                bestState = {
-                    totalValue: totalValue,
-                    overflow: currentOverflow,
-                    expectation: state.expectation,
-                    baseRaw: state.baseRaw,
-                    indices: state.indices
-                };
-            }
-        });
-
-        selected = bestState && bestState.indices && bestState.indices.length
-            ? bestState.indices.map(function(index) {
-                return allCandidates[index];
-            })
-            : allCandidates.slice(0, areaItem.people);
-
-        return evaluateVegSelection(selected);
+        return trySupplementVegSelectionWithTechniqueAmber(
+            solveVegSelection(allCandidates),
+            areaItem,
+            availableChefs,
+            chefPoolData
+        );
     }
 
     // 根据地区名确定结果卡片里的采集维度高亮。
@@ -7463,6 +8138,8 @@
         }).filter(function(item) {
             return !!item;
         });
+
+        rebalanceVegAreaResults(results, chefPoolData);
 
         results.forEach(function(result) {
             if (groupOrder.indexOf(result.groupKey) < 0) {
