@@ -538,6 +538,9 @@ var BanquetOptimizer = (function() {
     }
 
     function _buildRecipeIntentFit(ruleIndex, chefIndex, recipeIndex, slotState, slotRecipes, ownIntents, nextDishIntents, slotIntentAdds) {
+        if (!slotState || !slotState.recipes || !slotState.chefObj) {
+            return null;
+        }
         var rec = slotState.recipes[recipeIndex];
         if (!rec || !rec.data) return null;
 
@@ -619,6 +622,9 @@ var BanquetOptimizer = (function() {
         var totalFit = 0;
         for (var ci = 0; ci < ruleState.length; ci++) {
             var slotState = ruleState[ci];
+            if (!slotState || !slotState.chefObj || !slotState.recipes) {
+                continue;
+            }
             var ownIntents = _getPositionIntents(ruleIndex, ci);
             var nextDishIntents = _analyzeNextDishIntents(ruleIndex, ci);
             for (var reci = 0; reci < 3; reci++) {
