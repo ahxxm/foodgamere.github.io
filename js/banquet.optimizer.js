@@ -98,7 +98,9 @@ var BanquetOptimizer = (function() {
     var _fullGuestRebuildAttempts = 0;
     var _fullGuestRebuildHits = 0;
     var _newbieEquipEnabled = false;
+    var _intermediateEquipEnabled = false;
     var _newbiePoolEquipsByRule = [];
+    var _intermediatePoolEquipsByRule = [];
 
     var CONFIG = {
         recipeSeedK: 6,       // 种子菜谱数
@@ -1124,7 +1126,9 @@ var BanquetOptimizer = (function() {
         _topCandidates = [];
         _topCandidateMeta = [];
         _newbieEquipEnabled = false;
+        _intermediateEquipEnabled = false;
         _newbiePoolEquipsByRule = [];
+        _intermediatePoolEquipsByRule = [];
         
         if (typeof calCustomRule !== 'undefined' && calCustomRule && calCustomRule.rules) {
             _rules = calCustomRule.rules;
@@ -1151,10 +1155,14 @@ var BanquetOptimizer = (function() {
             excludeMaterials: $("#chk-cal-recipe-material-exclude").val() || [],
             useNewbieEquip: $("#chk-banquet-newbie-equip").length
                 ? $("#chk-banquet-newbie-equip").prop("checked")
-                : (typeof window.getBanquetNewbieEquipEnabled === 'function' && !!window.getBanquetNewbieEquipEnabled())
+                : (typeof window.getBanquetNewbieEquipEnabled === 'function' && !!window.getBanquetNewbieEquipEnabled()),
+            useIntermediateEquip: $("#chk-banquet-intermediate-equip").length
+                ? $("#chk-banquet-intermediate-equip").prop("checked")
+                : (typeof window.getBanquetIntermediateEquipEnabled === 'function' && !!window.getBanquetIntermediateEquipEnabled())
         };
 
         _newbieEquipEnabled = !!_cachedConfig.useNewbieEquip;
+        _intermediateEquipEnabled = !!_cachedConfig.useIntermediateEquip;
         
         // 构建快速查找表
         _chefMap = {};
@@ -1222,16 +1230,17 @@ var BanquetOptimizer = (function() {
             }
             _menusByRule.push(menus);
             _newbiePoolEquipsByRule[ri] = _filterNewbiePoolEquips(rule.equips || []);
+            _intermediatePoolEquipsByRule[ri] = _filterIntermediatePoolEquips(rule.equips || []);
         }
 
-        if (_newbieEquipEnabled) {
-            var totalNewbieEquips = 0;
-            for (var nri = 0; nri < _newbiePoolEquipsByRule.length; nri++) {
-                totalNewbieEquips += (_newbiePoolEquipsByRule[nri] || []).length;
+        if (_isAnyAutoPoolEquipEnabled()) {
+            var totalAutoPoolEquips = 0;
+            for (var nri = 0; nri < _rules.length; nri++) {
+                totalAutoPoolEquips += _getAutoPoolEquipsForRule(nri).length;
             }
-            console.log('[风云宴] 新手奖池厨具自动搭配: 开启 (' +
+            console.log('[风云宴] 奖池厨具自动搭配(' + _getAutoPoolEquipLabel() + '): 开启 (' +
                 (_cachedConfig.useEquip ? '勾选已配厨具时仅补无厨具厨师' : '未勾选已配厨具时全员自动搭配') +
-                ', 新手厨具' + totalNewbieEquips + '个)');
+                ', 奖池厨具' + totalAutoPoolEquips + '个)');
         }
 
         _debugLog('init', '初始化完成', {
@@ -1364,15 +1373,54 @@ var BanquetOptimizer = (function() {
         return clone;
     }
 
-    function _filterNewbiePoolEquips(equips) {
+    function _filterPoolEquips(equips, originKeyword) {
         var results = [];
         for (var i = 0; i < equips.length; i++) {
             var equip = equips[i];
             if (!equip) continue;
             var origin = equip.origin || '';
-            if (origin.indexOf('新手奖池') >= 0) results.push(equip);
+            if (origin.indexOf(originKeyword) >= 0) results.push(equip);
         }
         return results;
+    }
+
+    function _filterNewbiePoolEquips(equips) {
+        return _filterPoolEquips(equips, '新手奖池');
+    }
+
+    function _filterIntermediatePoolEquips(equips) {
+        return _filterPoolEquips(equips, '中级奖池');
+    }
+
+    function _isAnyAutoPoolEquipEnabled() {
+        return _newbieEquipEnabled || _intermediateEquipEnabled;
+    }
+
+    function _getAutoPoolEquipsForRule(ruleIndex) {
+        var merged = [];
+        var seenEquipIds = {};
+
+        function addPool(poolEquips) {
+            for (var i = 0; i < poolEquips.length; i++) {
+                var equip = poolEquips[i];
+                if (!equip) continue;
+                var equipKey = equip.equipId || ('idx_' + merged.length + '_' + i);
+                if (seenEquipIds[equipKey]) continue;
+                seenEquipIds[equipKey] = true;
+                merged.push(equip);
+            }
+        }
+
+        if (_newbieEquipEnabled) addPool(_newbiePoolEquipsByRule[ruleIndex] || []);
+        if (_intermediateEquipEnabled) addPool(_intermediatePoolEquipsByRule[ruleIndex] || []);
+        return merged;
+    }
+
+    function _getAutoPoolEquipLabel() {
+        var labels = [];
+        if (_newbieEquipEnabled) labels.push('新手奖池');
+        if (_intermediateEquipEnabled) labels.push('中级奖池');
+        return labels.join('+');
     }
 
     function _slotHasRecipes(ruleIndex, chefIndex) {
@@ -1384,10 +1432,10 @@ var BanquetOptimizer = (function() {
         return false;
     }
 
-    function _shouldAutoFitNewbieEquipForSlot(ruleIndex, chefIndex) {
-        if (!_newbieEquipEnabled) return false;
-        var newbiePool = _newbiePoolEquipsByRule[ruleIndex] || [];
-        if (!newbiePool.length) return false;
+    function _shouldAutoFitPoolEquipForSlot(ruleIndex, chefIndex) {
+        if (!_isAnyAutoPoolEquipEnabled()) return false;
+        var autoPool = _getAutoPoolEquipsForRule(ruleIndex);
+        if (!autoPool.length) return false;
         var slot = _simState[ruleIndex][chefIndex];
         if (!slot || !slot.chefObj || !slot.chefObj.chefId) return false;
         if (!_slotHasRecipes(ruleIndex, chefIndex)) return false;
@@ -1413,20 +1461,20 @@ var BanquetOptimizer = (function() {
         }
     }
 
-    function _rankNewbieEquipsForSlot(ruleIndex, chefIndex) {
-        if (!_shouldAutoFitNewbieEquipForSlot(ruleIndex, chefIndex)) return [];
+    function _rankAutoPoolEquipsForSlot(ruleIndex, chefIndex) {
+        if (!_shouldAutoFitPoolEquipForSlot(ruleIndex, chefIndex)) return [];
 
-        var newbiePool = _newbiePoolEquipsByRule[ruleIndex] || [];
+        var autoPool = _getAutoPoolEquipsForRule(ruleIndex);
         var savedState = _cloneSimState(_simState);
         var results = [];
 
-        for (var i = 0; i < newbiePool.length; i++) {
+        for (var i = 0; i < autoPool.length; i++) {
             _simState = _cloneSimState(savedState);
-            _simState[ruleIndex][chefIndex].equipObj = newbiePool[i];
+            _simState[ruleIndex][chefIndex].equipObj = autoPool[i];
             _applyChefData(ruleIndex);
             _refreshRecipeQuantitiesForSlot(ruleIndex, chefIndex);
             results.push({
-                equipObj: newbiePool[i],
+                equipObj: autoPool[i],
                 score: _calcRuleScore(ruleIndex, true)
             });
         }
@@ -1436,9 +1484,9 @@ var BanquetOptimizer = (function() {
         return results;
     }
 
-    function _fitNewbieEquipForSlot(ruleIndex, chefIndex) {
-        if (!_shouldAutoFitNewbieEquipForSlot(ruleIndex, chefIndex)) return false;
-        var ranked = _rankNewbieEquipsForSlot(ruleIndex, chefIndex);
+    function _fitAutoPoolEquipForSlot(ruleIndex, chefIndex) {
+        if (!_shouldAutoFitPoolEquipForSlot(ruleIndex, chefIndex)) return false;
+        var ranked = _rankAutoPoolEquipsForSlot(ruleIndex, chefIndex);
         if (!ranked.length || !ranked[0].equipObj) return false;
 
         var slot = _simState[ruleIndex][chefIndex];
@@ -1451,8 +1499,8 @@ var BanquetOptimizer = (function() {
         return true;
     }
 
-    function _fitNewbieEquipsForCurrentState(activeRules) {
-        if (!_newbieEquipEnabled) return false;
+    function _fitAutoPoolEquipsForCurrentState(activeRules) {
+        if (!_isAnyAutoPoolEquipEnabled()) return false;
 
         var rulesToProcess = activeRules && activeRules.length ? activeRules.slice() : [];
         if (!rulesToProcess.length) {
@@ -1471,7 +1519,7 @@ var BanquetOptimizer = (function() {
             var ruleIndex = rulesToProcess[rpi];
             var ruleState = _simState[ruleIndex] || [];
             for (var ci = 0; ci < ruleState.length; ci++) {
-                if (_fitNewbieEquipForSlot(ruleIndex, ci)) improved = true;
+                if (_fitAutoPoolEquipForSlot(ruleIndex, ci)) improved = true;
             }
         }
 
@@ -1480,7 +1528,7 @@ var BanquetOptimizer = (function() {
             for (var eri = 0; eri < rulesToProcess.length; eri++) {
                 fittedScore += _calcRuleScore(rulesToProcess[eri], true);
             }
-            console.log('[风云宴] 新手奖池厨具自动搭配: ' + startScore + '→' + fittedScore + ' (+' + (fittedScore - startScore) + ')');
+            console.log('[风云宴] 奖池厨具自动搭配(' + _getAutoPoolEquipLabel() + '): ' + startScore + '→' + fittedScore + ' (+' + (fittedScore - startScore) + ')');
         }
 
         return improved;
@@ -4443,8 +4491,8 @@ var BanquetOptimizer = (function() {
                     }
                 }
             }
-            if (_newbieEquipEnabled) {
-                changed = _fitNewbieEquipsForCurrentState(activeRules) || changed;
+            if (_isAnyAutoPoolEquipEnabled()) {
+                changed = _fitAutoPoolEquipsForCurrentState(activeRules) || changed;
             }
             if (!changed) break;
         }
@@ -5775,9 +5823,9 @@ var BanquetOptimizer = (function() {
                 }
                 
                 function _finishSeed() {
-                    if (_newbieEquipEnabled) {
+                    if (_isAnyAutoPoolEquipEnabled()) {
                         _simState = _cloneSimState(_bestSimState);
-                        if (_fitNewbieEquipsForCurrentState()) {
+                        if (_fitAutoPoolEquipsForCurrentState()) {
                             _bestScore = _fastCalcScore();
                             _bestSimState = _cloneSimState(_simState);
                         }
@@ -6208,7 +6256,7 @@ var BanquetOptimizer = (function() {
         _activeClimbRound = round;
         _simState = _cloneSimState(_bestSimState);
         var scoreBefore = _bestScore;
-        var chefImproved = false, swapImproved = false, recipeImproved = false, recipeSwapImproved = false, recipeRebuildImproved = false, chefPermuteImproved = false, jointImproved = false, newbieEquipImproved = false;
+        var chefImproved = false, swapImproved = false, recipeImproved = false, recipeSwapImproved = false, recipeRebuildImproved = false, chefPermuteImproved = false, jointImproved = false, autoPoolEquipImproved = false;
         var roundStartMs = Date.now();
 
         function _logClimbStep(step, beforeScore, improved) {
@@ -6283,10 +6331,10 @@ var BanquetOptimizer = (function() {
                                         jointImproved: jointImproved,
                                         elapsedMs: Date.now() - roundStartMs
                                     });
-                                    if (_newbieEquipEnabled) {
+                                    if (_isAnyAutoPoolEquipEnabled()) {
                                         _simState = _cloneSimState(_bestSimState);
-                                        newbieEquipImproved = _fitNewbieEquipsForCurrentState();
-                                        if (newbieEquipImproved) {
+                                        autoPoolEquipImproved = _fitAutoPoolEquipsForCurrentState();
+                                        if (autoPoolEquipImproved) {
                                             _bestScore = _fastCalcScore();
                                             _bestSimState = _cloneSimState(_simState);
                                         }
@@ -6301,7 +6349,7 @@ var BanquetOptimizer = (function() {
                                             recipeRebuildImproved: recipeRebuildImproved,
                                             chefPermuteImproved: chefPermuteImproved,
                                             jointImproved: jointImproved,
-                                            newbieEquipImproved: newbieEquipImproved
+                                            autoPoolEquipImproved: autoPoolEquipImproved
                                         });
                                     }
                                 
@@ -6312,7 +6360,7 @@ var BanquetOptimizer = (function() {
                                         return;
                                     }
                                     
-                                    if (!chefImproved && !recipeImproved && !swapImproved && !recipeSwapImproved && !recipeRebuildImproved && !chefPermuteImproved && !jointImproved && !newbieEquipImproved) {
+                                    if (!chefImproved && !recipeImproved && !swapImproved && !recipeSwapImproved && !recipeRebuildImproved && !chefPermuteImproved && !jointImproved && !autoPoolEquipImproved) {
                                         _activeClimbRound = -1;
                                         if (typeof onDone === 'function') onDone();
                                     } else {
@@ -6365,7 +6413,9 @@ var BanquetOptimizer = (function() {
             _recipeMap = {};
             _menusByRule = [];
             _newbieEquipEnabled = false;
+            _intermediateEquipEnabled = false;
             _newbiePoolEquipsByRule = [];
+            _intermediatePoolEquipsByRule = [];
             _rules = [];
             _gameData = null;
             _cachedConfig = {};
@@ -6683,17 +6733,17 @@ var BanquetOptimizer = (function() {
             _setProgressTarget(93);
             setTimeout(function() {
                 var fixedCount = _runMissingChefRepair();
-                var newbieEquipImproved = false;
-                if (_newbieEquipEnabled) {
-                    newbieEquipImproved = _fitNewbieEquipsForCurrentState();
-                    if (newbieEquipImproved) {
+                var autoPoolEquipImproved = false;
+                if (_isAnyAutoPoolEquipEnabled()) {
+                    autoPoolEquipImproved = _fitAutoPoolEquipsForCurrentState();
+                    if (autoPoolEquipImproved) {
                         _bestSimState = _cloneSimState(_simState);
                         _bestScore = _fastCalcScore();
                     }
                 }
                 _logFinishStage('缺失厨师修复完成', {
                     fixedPositions: fixedCount,
-                    newbieEquipImproved: newbieEquipImproved
+                    autoPoolEquipImproved: autoPoolEquipImproved
                 });
                 _runSatietyRepairAsync();
             }, 0);

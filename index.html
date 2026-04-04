@@ -5,6 +5,17 @@
     <title>图鉴</title>
     <meta charset="UTF-8">
     <meta name="viewport" id="viewport" content="width=device-width">
+    <meta name="theme-color" content="#f5f6fa">
+    <script>
+        (function () {
+            try {
+                var theme = localStorage.getItem('foodgame-theme');
+                if (theme === 'dark' || theme === 'light') {
+                    document.documentElement.setAttribute('data-theme', theme);
+                }
+            } catch (e) { }
+        })();
+    </script>
     <link rel="shortcut icon" href="favicon.ico?v=1" type="image/x-icon" />
     <link rel="stylesheet" type="text/css" href="css/style.min.css?v=7" />
     <script type="text/javascript" src="js/script.min.js?v=22"></script>
@@ -14,12 +25,14 @@
     <script type="text/javascript" src="js/query.guest.js?v=2"></script>
     <script type="text/javascript" src="js/food.min.js?v=267"></script>
     <script type="text/javascript" src="js/query.cultivate.js?v=4"></script>
-    <script type="text/javascript" src="js/query.collection.js?v=4"></script>
+    <script type="text/javascript" src="js/query.collection.js?v=3"></script>
     <script type="text/javascript" src="js/banquet.optimizer.js?v=1"></script>
     <script type="text/javascript" src="js/jianghu.optimizer.js?v=1"></script>
     <script type="text/javascript" src="js/competition.optimizer.simple.js?v=1"></script>
     <link rel="stylesheet" type="text/css" href="css/image.css?v=173" />
-    <link rel="stylesheet" type="text/css" href="css/query.collection.css?v=4" />
+    <link rel="stylesheet" type="text/css" href="css/query.collection.css?v=3" />
+    <link rel="stylesheet" type="text/css" href="css/theme.css?v=16" />
+    <script type="text/javascript" src="js/theme.js?v=16"></script>
     <script>
         $(function () {
             $.ajax({
@@ -2177,6 +2190,9 @@
                             <button id="btn-banquet-auto" class="btn btn-primary" type="button">
                                 自动计算
                             </button>
+                            <button id="btn-banquet-stop" class="btn btn-danger hidden" type="button" style="margin-left: 3px;">
+                                停止计算
+                            </button>
                             <button id="btn-banquet-settings" class="btn btn-default btn-sm" type="button" style="display: inline-block; margin-left: 3px; vertical-align: top; margin-top: 1px;" title="风云宴设置">
                                 <span class="glyphicon glyphicon-cog"></span>
                             </button>
@@ -2206,13 +2222,16 @@
                                     data-none-selected-text="厨师组合" data-none-results-text="无">
                                 </select>
                             </div>
-                            <div class="select-wrapper" style="display: inline-block; margin-right: 5px;">
-                                <select id="select-competition-tier" class="selectpicker" data-width="auto" data-style="btn-default">
+                            <div class="select-wrapper" style="display: inline-block; margin-right: 5px; min-width: 132px;">
+                                <select id="select-competition-tier" class="selectpicker" data-width="132px" data-style="btn-default">
                                     <option value="-1">不限制分数</option>
                                 </select>
                             </div>
                             <button id="btn-competition-auto" class="btn btn-primary" type="button">
                                 自动计算
+                            </button>
+                            <button id="btn-competition-stop" class="btn btn-danger hidden" type="button" style="margin-left: 3px;">
+                                停止计算
                             </button>
                             <button id="btn-competition-settings" class="btn btn-default btn-sm" type="button" style="display: inline-block; margin-left: 3px; vertical-align: top; margin-top: 1px;" title="算法设置">
                                 <span class="glyphicon glyphicon-cog"></span>
@@ -2879,6 +2898,13 @@
                     <span class="modal-title">设置</h3>
                 </div>
                 <div class="modal-body">
+                    <p class="setting-theme-row">
+                        <input type="checkbox" id="chk-setting-theme" data-toggle="toggle" data-on="夜间"
+                            data-off="日间" data-onstyle="default" data-size="small" data-width="65px">
+                        <span class="setting-tip">
+                            切换日间/夜间模式
+                        </span>
+                    </p>
                     <p>
                         <input type="checkbox" id="chk-setting-desktop" data-toggle="toggle" data-on="桌面版"
                             data-off="手机版" data-onstyle="default" data-size="small" data-width="65px" checked>
@@ -3131,7 +3157,9 @@
     var STORAGE_ACTIVE_KEY = 'competition_algorithm_active';
     var STORAGE_AUTO_CONDIMENT_KEY = 'competition_auto_condiment';
     var STORAGE_DEFAULT_NEWBIE_EQUIP_KEY = 'competition_default_newbie_equip';
+    var STORAGE_DEFAULT_INTERMEDIATE_EQUIP_KEY = 'competition_default_intermediate_equip';
     var STORAGE_BANQUET_NEWBIE_EQUIP_KEY = 'banquet_newbie_equip';
+    var STORAGE_BANQUET_INTERMEDIATE_EQUIP_KEY = 'banquet_intermediate_equip';
     var algorithmList = [];
     var activeAlgorithmId = null;
 
@@ -3188,6 +3216,78 @@
             console.error('[厨神大赛] 读取算法失败:', e);
             return null;
         }
+    }
+
+    function getCurrentAlgorithmMeta() {
+        if (activeAlgorithmId) {
+            for (var i = 0; i < algorithmList.length; i++) {
+                if (algorithmList[i].id === activeAlgorithmId) {
+                    return {
+                        id: activeAlgorithmId,
+                        name: algorithmList[i].name || 'competition.algorithm.js',
+                        code: getAlgorithmCode(activeAlgorithmId),
+                        isDefault: false
+                    };
+                }
+            }
+        }
+
+        return {
+            id: null,
+            name: 'competition.optimizer.simple.js',
+            code: null,
+            isDefault: true
+        };
+    }
+
+    function normalizeAlgorithmFileName(name) {
+        var fileName = (name || 'competition.algorithm.js').replace(/[\\/:*?"<>|]+/g, '_');
+        if (!/\.js$/i.test(fileName)) {
+            fileName += '.js';
+        }
+        return fileName;
+    }
+
+    function downloadAlgorithmFile(fileName, code) {
+        var blob = new Blob([code], { type: 'application/javascript;charset=utf-8' });
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement('a');
+        link.href = url;
+        link.download = normalizeAlgorithmFileName(fileName);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(function() {
+            URL.revokeObjectURL(url);
+        }, 0);
+    }
+
+    function fetchDefaultCompetitionAlgorithmCode() {
+        var script = document.querySelector('script[src*="js/competition.optimizer.simple.js"]');
+        var src = script ? script.getAttribute('src') : 'js/competition.optimizer.simple.js';
+        return fetch(src, { cache: 'no-store' }).then(function(response) {
+            if (!response.ok) {
+                throw new Error('默认算法文件读取失败: ' + response.status);
+            }
+            return response.text();
+        });
+    }
+
+    function exportCurrentAlgorithm() {
+        var currentMeta = getCurrentAlgorithmMeta();
+        if (!currentMeta.isDefault && currentMeta.code) {
+            downloadAlgorithmFile(currentMeta.name, currentMeta.code);
+            showAlert('当前算法已导出', '成功');
+            return;
+        }
+
+        fetchDefaultCompetitionAlgorithmCode().then(function(code) {
+            downloadAlgorithmFile(currentMeta.name, code);
+            showAlert('默认算法已导出', '成功');
+        }).catch(function(error) {
+            console.error('[厨神大赛] 导出算法失败:', error);
+            showAlert('导出算法失败：' + error.message, '错误');
+        });
     }
 
     function saveAlgorithm(name, code) {
@@ -3272,6 +3372,20 @@
         } catch (e) {}
     }
 
+    function getDefaultIntermediateEquipEnabled() {
+        try {
+            return localStorage.getItem(STORAGE_DEFAULT_INTERMEDIATE_EQUIP_KEY) === '1';
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function setDefaultIntermediateEquipEnabled(enabled) {
+        try {
+            localStorage.setItem(STORAGE_DEFAULT_INTERMEDIATE_EQUIP_KEY, enabled ? '1' : '0');
+        } catch (e) {}
+    }
+
     function getBanquetNewbieEquipEnabled() {
         try {
             return localStorage.getItem(STORAGE_BANQUET_NEWBIE_EQUIP_KEY) === '1';
@@ -3286,11 +3400,33 @@
         } catch (e) {}
     }
 
+    function getBanquetIntermediateEquipEnabled() {
+        try {
+            return localStorage.getItem(STORAGE_BANQUET_INTERMEDIATE_EQUIP_KEY) === '1';
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function setBanquetIntermediateEquipEnabled(enabled) {
+        try {
+            localStorage.setItem(STORAGE_BANQUET_INTERMEDIATE_EQUIP_KEY, enabled ? '1' : '0');
+        } catch (e) {}
+    }
+
     function syncBanquetNewbieEquipToggle() {
         var enabled = getBanquetNewbieEquipEnabled();
         $('#chk-banquet-newbie-equip').prop('checked', enabled);
         if ($('#chk-banquet-newbie-equip').parent().hasClass('toggle')) {
             $('#chk-banquet-newbie-equip').bootstrapToggle(enabled ? 'on' : 'off');
+        }
+    }
+
+    function syncBanquetIntermediateEquipToggle() {
+        var enabled = getBanquetIntermediateEquipEnabled();
+        $('#chk-banquet-intermediate-equip').prop('checked', enabled);
+        if ($('#chk-banquet-intermediate-equip').parent().hasClass('toggle')) {
+            $('#chk-banquet-intermediate-equip').bootstrapToggle(enabled ? 'on' : 'off');
         }
     }
 
@@ -3314,7 +3450,9 @@
 
     window.getCompetitionAutoCondimentEnabled = getAutoCondimentEnabled;
     window.getCompetitionDefaultNewbieEquipEnabled = getDefaultNewbieEquipEnabled;
+    window.getCompetitionDefaultIntermediateEquipEnabled = getDefaultIntermediateEquipEnabled;
     window.getBanquetNewbieEquipEnabled = getBanquetNewbieEquipEnabled;
+    window.getBanquetIntermediateEquipEnabled = getBanquetIntermediateEquipEnabled;
     window.isDefaultCompetitionMode = isDefaultCompetitionMode;
 
     function executeAlgorithm(code) {
@@ -3347,10 +3485,17 @@
                 '<div id="competition-default-settings" style="display: none; margin-bottom: 20px;">' +
                     '<div style="margin-top: 6px; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between;">' +
                         '<div>' +
-                            '<div style="font-weight: bold; font-size: 14px;">无厨具厨师使用新手厨具</div>' +
-                            '<div style="font-size: 12px; color: #888; margin-top: 4px;">勾选后，会按新手奖池厨具做自动搭配</div>' +
+                            '<div style="font-weight: bold; font-size: 14px;">自动搭配新手奖池厨具</div>' +
+                            '<div style="font-size: 12px; color: #888; margin-top: 4px;">使用新手厨具自动搭配；勾选已配厨具时无厨具厨师补充新手厨具</div>' +
                         '</div>' +
                         '<input type="checkbox" id="chk-competition-default-newbie-equip" data-toggle="toggle" data-on="开" data-off="关" data-onstyle="default" data-size="small" data-width="56px">' +
+                    '</div>' +
+                    '<div style="margin-top: 16px; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between;">' +
+                        '<div>' +
+                            '<div style="font-weight: bold; font-size: 14px;">自动搭配中级奖池厨具</div>' +
+                            '<div style="font-size: 12px; color: #888; margin-top: 4px;">使用中级厨具自动搭配；勾选已配厨具时无厨具厨师补充中级厨具、</div>' +
+                        '</div>' +
+                        '<input type="checkbox" id="chk-competition-default-intermediate-equip" data-toggle="toggle" data-on="开" data-off="关" data-onstyle="default" data-size="small" data-width="56px">' +
                     '</div>' +
                 '</div>' +
                 '<div id="competition-advanced-settings" style="margin-bottom: 20px;">' +
@@ -3368,6 +3513,7 @@
                                 '<option value="">暂无算法</option>' +
                             '</select>' +
                         '</div>' +
+                        '<button id="btn-export-current-algorithm" class="btn btn-default" style="white-space: nowrap; height: 38px;"><span class="glyphicon glyphicon-download-alt"></span> 导出当前算法</button>' +
                         '<button id="btn-delete-current-algorithm" class="btn btn-danger" style="white-space: nowrap; height: 38px;" disabled><span class="glyphicon glyphicon-trash"></span> 删除算法</button>' +
                     '</div>' +
                     '<div style="margin-top: 6px; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between;">' +
@@ -3389,9 +3535,16 @@
                 '<div style="margin-top: 6px; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between;">' +
                     '<div>' +
                         '<div style="font-weight: bold; font-size: 14px;">自动搭配新手厨具</div>' +
-                        '<div style="font-size: 12px; color: #888; margin-top: 4px;">勾选后，会按新手奖池厨具做自动搭配；勾选已配厨具时仅补无厨具厨师</div>' +
+                        '<div style="font-size: 12px; color: #888; margin-top: 4px;">使用新手厨具自动搭配；勾选已配厨具无厨具厨师补充新手厨具</div>' +
                     '</div>' +
                     '<input type="checkbox" id="chk-banquet-newbie-equip" data-toggle="toggle" data-on="开" data-off="关" data-onstyle="default" data-size="small" data-width="56px">' +
+                '</div>' +
+                '<div style="margin-top: 16px; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between;">' +
+                    '<div>' +
+                        '<div style="font-weight: bold; font-size: 14px;">自动搭配中级奖池厨具</div>' +
+                        '<div style="font-size: 12px; color: #888; margin-top: 4px;">使用中级厨具自动搭配；勾选已配厨具时无厨具厨师补充中级厨具</div>' +
+                    '</div>' +
+                    '<input type="checkbox" id="chk-banquet-intermediate-equip" data-toggle="toggle" data-on="开" data-off="关" data-onstyle="default" data-size="small" data-width="56px">' +
                 '</div>' +
             '</div>' +
         '</div>';
@@ -3400,7 +3553,9 @@
         if ($.fn.bootstrapToggle) {
             $('#chk-competition-auto-condiment').bootstrapToggle();
             $('#chk-competition-default-newbie-equip').bootstrapToggle();
+            $('#chk-competition-default-intermediate-equip').bootstrapToggle();
             $('#chk-banquet-newbie-equip').bootstrapToggle();
+            $('#chk-banquet-intermediate-equip').bootstrapToggle();
         }
     }
 
@@ -3411,9 +3566,14 @@
         $('#competition-settings-modal h4').text('设置');
 
         var newbieEnabled = getDefaultNewbieEquipEnabled();
+        var intermediateEnabled = getDefaultIntermediateEquipEnabled();
         $('#chk-competition-default-newbie-equip').prop('checked', newbieEnabled);
         if ($('#chk-competition-default-newbie-equip').parent().hasClass('toggle')) {
             $('#chk-competition-default-newbie-equip').bootstrapToggle(newbieEnabled ? 'on' : 'off');
+        }
+        $('#chk-competition-default-intermediate-equip').prop('checked', intermediateEnabled);
+        if ($('#chk-competition-default-intermediate-equip').parent().hasClass('toggle')) {
+            $('#chk-competition-default-intermediate-equip').bootstrapToggle(intermediateEnabled ? 'on' : 'off');
         }
     }
 
@@ -3452,6 +3612,7 @@
     function initEventListeners() {
         $(document).on('click', '#btn-banquet-settings', function() {
             syncBanquetNewbieEquipToggle();
+            syncBanquetIntermediateEquipToggle();
             $('#banquet-settings-modal').css('display', 'flex');
         });
 
@@ -3562,8 +3723,20 @@
             setDefaultNewbieEquipEnabled($(this).prop('checked'));
         });
 
+        $(document).on('change', '#chk-competition-default-intermediate-equip', function() {
+            setDefaultIntermediateEquipEnabled($(this).prop('checked'));
+        });
+
         $(document).on('change', '#chk-banquet-newbie-equip', function() {
             setBanquetNewbieEquipEnabled($(this).prop('checked'));
+        });
+
+        $(document).on('change', '#chk-banquet-intermediate-equip', function() {
+            setBanquetIntermediateEquipEnabled($(this).prop('checked'));
+        });
+
+        $(document).on('click', '#btn-export-current-algorithm', function() {
+            exportCurrentAlgorithm();
         });
 
         $(document).on('click', '#btn-delete-current-algorithm', function() {
