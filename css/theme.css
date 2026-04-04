@@ -479,6 +479,22 @@ html[data-theme="dark"] .chef-box .content .name.disk-3 {
     color: #8ab4f8;
 }
 
+html[data-theme="dark"] .chef-box .disk-level-box .content .name {
+    color: var(--theme-text) !important;
+}
+
+html[data-theme="dark"] .chef-box .disk-box .content:has(.name.disk-1) small {
+    color: #ffc0ba !important;
+}
+
+html[data-theme="dark"] .chef-box .disk-box .content:has(.name.disk-2) small {
+    color: #b2f0c1 !important;
+}
+
+html[data-theme="dark"] .chef-box .disk-box .content:has(.name.disk-3) small {
+    color: #b8d5ff !important;
+}
+
 html[data-theme="dark"] .recipe-box .recipe-ric .rank.rank-ke {
     color: var(--theme-text);
 }
@@ -1660,6 +1676,18 @@ html[data-theme="dark"] .condiment-box .content .name,
 html[data-theme="dark"] .equip-box .content .name,
 html[data-theme="dark"] .recipe-box .content .name {
     color: #9fc4ff !important;
+}
+
+html[data-theme="dark"] .chef-box .disk-box .content .name.disk-1 {
+    color: #ff9a94 !important;
+}
+
+html[data-theme="dark"] .chef-box .disk-box .content .name.disk-2 {
+    color: #8be1a2 !important;
+}
+
+html[data-theme="dark"] .chef-box .disk-box .content .name.disk-3 {
+    color: #8ab4f8 !important;
 }
 
 html[data-theme="dark"] .chef-box .chef-box-1 .content span,
