@@ -31,7 +31,6 @@ var OneClickQuery = (function($) {
     var GOLD_RUNES = ['恐怖利刃', '鼓风机', '蒸馏杯', '千年煮鳖', '香烤鱼排', '五星炒果'];
     var SILVER_RUNES = ['刀嘴鹦鹉', '一昧真火', '蒸汽宝石', '耐煮的水草', '焦虫', '暖石'];
     var BRONZE_RUNES = ['剪刀蟹', '油火虫', '蒸汽耳环', '防水的柠檬', '烤焦的菊花', '五香果'];
-    
     /**
      * 星级对应的最低份数要求
      */
@@ -126,6 +125,7 @@ var OneClickQuery = (function($) {
         defaultTime: 8.0,                // 制作时间（小时）
         queryMode: true,                 // 查询模式：true=查询效率，false=查询必来
         useExistingConfig: true,         // 使用场上已有配置：true=使用场上厨师/厨具/心法盘，false=每次重新筛选
+        singleRecipePerRune: false,      // 每种符文只查一个菜谱
         goldRuneSelections: [],          // 金符文选择
         silverRuneSelections: [],        // 银符文选择
         bronzeRuneSelections: [],        // 铜符文选择
@@ -140,6 +140,11 @@ var OneClickQuery = (function($) {
     
     var settings = $.extend({}, DEFAULT_SETTINGS);
     var isQueryInProgress = false;
+    var jadeRankingTableDataCache = null;
+    var jadeRankingTableLoading = false;
+    var jadeRankingTablePendingCallbacks = [];
+    var jadeRecipeValueMapCache = {};
+    var jadeRecipeValueMapLoaded = false;
 
     // ========================================
     // 设置存储函数
@@ -190,6 +195,131 @@ var OneClickQuery = (function($) {
     function setSetting(key, value) {
         settings[key] = value;
         saveSettings();
+    }
+
+    function normalizeJadeRecipeValueMap(data) {
+        var map = {};
+        if (!data) {
+            return map;
+        }
+
+        if ($.isArray(data)) {
+            for (var i = 0; i < data.length; i++) {
+                var item = data[i];
+                if (!item || !item.name) {
+                    continue;
+                }
+                var recipeName = $.trim(String(item.name));
+                var jadeValue = Number(item.value);
+                if (!recipeName || isNaN(jadeValue)) {
+                    continue;
+                }
+                map[recipeName] = jadeValue;
+            }
+            return map;
+        }
+
+        for (var key in data) {
+            if (!data.hasOwnProperty(key)) {
+                continue;
+            }
+            var normalizedName = $.trim(String(key));
+            var normalizedValue = Number(data[key]);
+            if (!normalizedName || isNaN(normalizedValue)) {
+                continue;
+            }
+            map[normalizedName] = normalizedValue;
+        }
+
+        return map;
+    }
+
+    function loadJadeRecipeValueMap(forceReload) {
+        if (jadeRecipeValueMapLoaded && !forceReload) {
+            return;
+        }
+
+        $.ajax({
+            url: 'data/jade-values.json?v=' + Date.now(),
+            dataType: 'json',
+            cache: false
+        }).done(function(data) {
+            jadeRecipeValueMapCache = normalizeJadeRecipeValueMap(data);
+            jadeRecipeValueMapLoaded = true;
+        }).fail(function() {
+            jadeRecipeValueMapCache = {};
+            jadeRecipeValueMapLoaded = true;
+        });
+    }
+
+    function ensureJadeRecipeValueMapLoaded() {
+        if (jadeRecipeValueMapLoaded) {
+            return;
+        }
+
+        $.ajax({
+            url: 'data/jade-values.json?v=' + Date.now(),
+            dataType: 'json',
+            cache: false,
+            async: false
+        }).done(function(data) {
+            jadeRecipeValueMapCache = normalizeJadeRecipeValueMap(data);
+            jadeRecipeValueMapLoaded = true;
+        }).fail(function() {
+            jadeRecipeValueMapCache = {};
+            jadeRecipeValueMapLoaded = true;
+        });
+    }
+
+    function getJadeRecipeValue(recipeName) {
+        if (!recipeName) {
+            return 0;
+        }
+        ensureJadeRecipeValueMapLoaded();
+        return Number(jadeRecipeValueMapCache[recipeName]) || 0;
+    }
+
+    function flushJadeRankingTableCallbacks(data, error) {
+        var callbacks = jadeRankingTablePendingCallbacks.slice();
+        jadeRankingTablePendingCallbacks = [];
+        for (var i = 0; i < callbacks.length; i++) {
+            callbacks[i](data, error);
+        }
+    }
+
+    function preloadJadeRankingTableData(forceReload, callback) {
+        if (jadeRankingTableDataCache && !forceReload) {
+            if (typeof callback === 'function') {
+                callback(jadeRankingTableDataCache, null);
+            }
+            return;
+        }
+
+        if (typeof callback === 'function') {
+            jadeRankingTablePendingCallbacks.push(callback);
+        }
+
+        if (jadeRankingTableLoading) {
+            return;
+        }
+
+        jadeRankingTableLoading = true;
+        if (forceReload) {
+            jadeRankingTableDataCache = null;
+        }
+
+        $.ajax({
+            url: 'data/jade-ranking-table.json?v=' + Date.now(),
+            dataType: 'json',
+            cache: false
+        }).done(function(response) {
+            jadeRankingTableDataCache = response;
+            jadeRankingTableLoading = false;
+            flushJadeRankingTableCallbacks(response, null);
+        }).fail(function(xhr, status, error) {
+            jadeRankingTableLoading = false;
+            flushJadeRankingTableCallbacks(null, error || status || 'load_failed');
+        });
     }
 
     // ========================================
@@ -999,6 +1129,9 @@ var OneClickQuery = (function($) {
         if (settings.goldRuneSelections && settings.goldRuneSelections.length > 0) {
             selected = selected.concat(settings.goldRuneSelections);
         }
+        if (isJadeQueryMode()) {
+            return selected;
+        }
         if (settings.silverRuneSelections && settings.silverRuneSelections.length > 0) {
             selected = selected.concat(settings.silverRuneSelections);
         }
@@ -1107,6 +1240,1475 @@ var OneClickQuery = (function($) {
         return boosted;
     }
 
+    function isJadeQueryMode() {
+        return $("#chk-guest-rate-submode").prop("checked") === true;
+    }
+
+    function buildRecipeByNameMap(recipes) {
+        var recipeByName = {};
+        for (var i = 0; i < recipes.length; i++) {
+            var recipe = recipes[i];
+            if (recipe && recipe.name) {
+                recipeByName[recipe.name] = recipe;
+            }
+        }
+        return recipeByName;
+    }
+
+    function buildEnhancedChefsForGroup(finalChefs, useExistingChefs, existingPositions, pageEquipsByPosition, useEquip) {
+        var onFieldAuraChefs = [];
+        var enhancedChefs = [];
+        var i, j, a, e;
+
+        for (i = 0; i < finalChefs.length; i++) {
+            var chef = finalChefs[i];
+            var skillBonus = getEmptySkillBonus();
+            var hasPartialSkill = false;
+            var conditionType = null;
+            var conditionValueList = null;
+
+            if (chef.ultimate === "是" && chef.ultimateSkillEffect) {
+                for (j = 0; j < chef.ultimateSkillEffect.length; j++) {
+                    var effect = chef.ultimateSkillEffect[j];
+                    if (effect.condition === 'Partial' && isSkillBonusType(effect.type)) {
+                        extractSkillBonus(effect, skillBonus);
+                        hasPartialSkill = true;
+                        if (effect.conditionType) conditionType = effect.conditionType;
+                        if (effect.conditionValueList) conditionValueList = effect.conditionValueList;
+                    }
+                }
+            }
+
+            if (hasPartialSkill) {
+                onFieldAuraChefs.push({
+                    chef: chef,
+                    chefIndex: i,
+                    skillBonus: skillBonus,
+                    conditionType: conditionType,
+                    conditionValueList: conditionValueList
+                });
+            }
+        }
+
+        for (i = 0; i < finalChefs.length; i++) {
+            var currentChef = finalChefs[i];
+            var originalPosition = useExistingChefs ? existingPositions[i] : i;
+            var pageEquipForPosition = pageEquipsByPosition[originalPosition] || null;
+            var partialAdds = [];
+            var auraBonus = getEmptySkillBonus();
+
+            for (a = 0; a < onFieldAuraChefs.length; a++) {
+                var auraChef = onFieldAuraChefs[a];
+                if (auraChef.chefIndex === i) {
+                    continue;
+                }
+                if (!checkAuraCondition(currentChef, auraChef)) {
+                    continue;
+                }
+
+                if (auraChef.chef.ultimateSkillEffect) {
+                    for (e = 0; e < auraChef.chef.ultimateSkillEffect.length; e++) {
+                        var auraEffect = auraChef.chef.ultimateSkillEffect[e];
+                        if (auraEffect.condition === 'Partial' && isSkillBonusType(auraEffect.type)) {
+                            partialAdds.push(auraEffect);
+                        }
+                    }
+                }
+                auraBonus = combineSkillBonus(auraBonus, auraChef.skillBonus);
+            }
+
+            var boostedChef;
+            if (pageEquipForPosition) {
+                boostedChef = getChefWithFullBonus(currentChef, false, pageEquipForPosition, partialAdds);
+            } else {
+                boostedChef = getChefWithFullBonus(currentChef, useEquip, null, partialAdds);
+            }
+
+            enhancedChefs.push({
+                original: currentChef,
+                enhanced: boostedChef,
+                auraBonus: auraBonus,
+                recipes: [],
+                originalPosition: originalPosition
+            });
+        }
+
+        return enhancedChefs;
+    }
+
+    function getEligibleChefAssignmentsForRecipe(recipe, enhancedChefs) {
+        var assignments = [];
+
+        for (var c = 0; c < enhancedChefs.length; c++) {
+            var enhancedChef = enhancedChefs[c].enhanced;
+            var rank = getRecipeRank(enhancedChef, recipe);
+            if (rank === 0) {
+                continue;
+            }
+
+            if (hasDivineRecipeSkill(enhancedChef) && rank < 4) {
+                continue;
+            }
+
+            assignments.push({
+                chefIndex: c,
+                rank: rank
+            });
+        }
+
+        assignments.sort(function(a, b) {
+            if (a.rank !== b.rank) {
+                return a.rank - b.rank;
+            }
+            return a.chefIndex - b.chefIndex;
+        });
+
+        return assignments;
+    }
+
+    function buildJadeRecipeBaseData(selectedRunes, recipes, gameData, onlyShowOwned) {
+        var recipeByName = buildRecipeByNameMap(recipes);
+        var allRuneRecipes = [];
+        var recipeToRunesMap = {};
+        var recipesByGuest = {};
+        var noConflictRecipes = {};
+        var conflictRecipes = {};
+        var conflictInfo = {};
+        var baseCandidateMap = {};
+        var baseCandidates = [];
+        var availableRunesMap = {};
+        var r, g, gf, i;
+
+        for (r = 0; r < selectedRunes.length; r++) {
+            var rune = selectedRunes[r];
+
+            for (g = 0; g < gameData.guests.length; g++) {
+                var guest = gameData.guests[g];
+                if (!guest.gifts) {
+                    continue;
+                }
+
+                for (gf = 0; gf < guest.gifts.length; gf++) {
+                    var gift = guest.gifts[gf];
+                    if (gift.antique !== rune) {
+                        continue;
+                    }
+
+                    var recipe = recipeByName[gift.recipe];
+                    if (!recipe) {
+                        continue;
+                    }
+                    if (onlyShowOwned && recipe.got !== "是") {
+                        continue;
+                    }
+
+                    if (!recipeToRunesMap[recipe.name]) {
+                        recipeToRunesMap[recipe.name] = [];
+                        allRuneRecipes.push(recipe);
+                    }
+                    if (recipeToRunesMap[recipe.name].indexOf(rune) === -1) {
+                        recipeToRunesMap[recipe.name].push(rune);
+                    }
+                }
+            }
+        }
+
+        for (i = 0; i < allRuneRecipes.length; i++) {
+            var currentRecipe = allRuneRecipes[i];
+
+            for (g = 0; g < gameData.guests.length; g++) {
+                var guestForGroup = gameData.guests[g];
+                if (!guestForGroup.gifts) {
+                    continue;
+                }
+
+                var hasRecipeForSelectedRunes = false;
+                for (gf = 0; gf < guestForGroup.gifts.length; gf++) {
+                    var guestGift = guestForGroup.gifts[gf];
+                    if (guestGift.recipe === currentRecipe.name && selectedRunes.indexOf(guestGift.antique) >= 0) {
+                        hasRecipeForSelectedRunes = true;
+                        break;
+                    }
+                }
+
+                if (!hasRecipeForSelectedRunes) {
+                    continue;
+                }
+
+                if (!recipesByGuest[guestForGroup.name]) {
+                    recipesByGuest[guestForGroup.name] = [];
+                }
+
+                var alreadyAdded = false;
+                for (var rg = 0; rg < recipesByGuest[guestForGroup.name].length; rg++) {
+                    if (recipesByGuest[guestForGroup.name][rg].recipeId === currentRecipe.recipeId) {
+                        alreadyAdded = true;
+                        break;
+                    }
+                }
+                if (!alreadyAdded) {
+                    recipesByGuest[guestForGroup.name].push(currentRecipe);
+                }
+            }
+        }
+
+        for (var guestName in recipesByGuest) {
+            var guestRecipes = recipesByGuest[guestName];
+
+            if (guestRecipes.length === 1) {
+                noConflictRecipes[guestRecipes[0].recipeId] = true;
+                continue;
+            }
+
+            var recipesWithAdjustedTime = [];
+            for (i = 0; i < guestRecipes.length; i++) {
+                var guestRecipe = guestRecipes[i];
+                var guestCount = getRecipeGuestCount(guestRecipe, gameData);
+                recipesWithAdjustedTime.push({
+                    recipe: guestRecipe,
+                    adjustedTime: (guestCount >= 2) ? (guestRecipe.time / 2) : guestRecipe.time
+                });
+            }
+
+            recipesWithAdjustedTime.sort(function(a, b) {
+                return a.adjustedTime - b.adjustedTime;
+            });
+
+            noConflictRecipes[recipesWithAdjustedTime[0].recipe.recipeId] = true;
+
+            for (i = 1; i < recipesWithAdjustedTime.length; i++) {
+                var conflictRecipe = recipesWithAdjustedTime[i].recipe;
+                conflictRecipes[conflictRecipe.recipeId] = true;
+                conflictInfo[conflictRecipe.recipeId] = {
+                    guestName: guestName,
+                    conflictWith: recipesWithAdjustedTime[0].recipe.name
+                };
+            }
+        }
+
+        for (r = 0; r < selectedRunes.length; r++) {
+            var selectedRune = selectedRunes[r];
+
+            for (g = 0; g < gameData.guests.length; g++) {
+                var guestItem = gameData.guests[g];
+                if (!guestItem.gifts) {
+                    continue;
+                }
+
+                for (gf = 0; gf < guestItem.gifts.length; gf++) {
+                    var giftItem = guestItem.gifts[gf];
+                    if (giftItem.antique !== selectedRune) {
+                        continue;
+                    }
+
+                    var matchedRecipe = recipeByName[giftItem.recipe];
+                    if (!matchedRecipe) {
+                        continue;
+                    }
+                    if (onlyShowOwned && matchedRecipe.got !== "是") {
+                        continue;
+                    }
+                    if (conflictRecipes[matchedRecipe.recipeId]) {
+                        continue;
+                    }
+
+                    var candidate = baseCandidateMap[matchedRecipe.recipeId];
+                    if (!candidate) {
+                        candidate = {
+                            recipe: matchedRecipe,
+                            runeOptions: []
+                        };
+                        baseCandidateMap[matchedRecipe.recipeId] = candidate;
+                        baseCandidates.push(candidate);
+                    }
+
+                    if (candidate.runeOptions.indexOf(selectedRune) === -1) {
+                        candidate.runeOptions.push(selectedRune);
+                    }
+                    availableRunesMap[selectedRune] = true;
+                }
+            }
+        }
+
+        var availableRunes = [];
+        for (r = 0; r < selectedRunes.length; r++) {
+            if (availableRunesMap[selectedRunes[r]]) {
+                availableRunes.push(selectedRunes[r]);
+            }
+        }
+
+        return {
+            baseCandidates: baseCandidates,
+            availableRunes: availableRunes,
+            conflictInfo: conflictInfo,
+            conflictCount: Object.keys(conflictRecipes).length
+        };
+    }
+
+    function buildJadeRecipeCandidatesForGroup(baseCandidates, enhancedChefs) {
+        var candidates = [];
+        var cannotMakeInfo = {};
+
+        for (var i = 0; i < baseCandidates.length; i++) {
+            var baseCandidate = baseCandidates[i];
+            var eligibleAssignments = getEligibleChefAssignmentsForRecipe(baseCandidate.recipe, enhancedChefs);
+
+            if (!eligibleAssignments.length) {
+                cannotMakeInfo[baseCandidate.recipe.recipeId] = baseCandidate.recipe.name;
+                continue;
+            }
+
+            candidates.push({
+                recipe: baseCandidate.recipe,
+                runeOptions: baseCandidate.runeOptions.slice(),
+                eligibleAssignments: eligibleAssignments
+            });
+        }
+
+        return {
+            candidates: candidates,
+            cannotMakeInfo: cannotMakeInfo,
+            cannotMakeCount: Object.keys(cannotMakeInfo).length
+        };
+    }
+
+    function encodeChefLoadCode(load0, load1, load2) {
+        return load0 + load1 * 4 + load2 * 16;
+    }
+
+    function decodeChefLoadCode(code) {
+        return [
+            code % 4,
+            Math.floor(code / 4) % 4,
+            Math.floor(code / 16) % 4
+        ];
+    }
+
+    function shouldReplaceJadeState(currentState, score, valueSum, timeSum, rankSum) {
+        var EPS = 1e-9;
+        if (!currentState) {
+            return true;
+        }
+        if (score > currentState.score + EPS) {
+            return true;
+        }
+        if (Math.abs(score - currentState.score) > EPS) {
+            return false;
+        }
+        if (rankSum < currentState.rankSum) {
+            return true;
+        }
+        if (rankSum > currentState.rankSum) {
+            return false;
+        }
+
+        var currentRatio = currentState.timeSum > 0 ? currentState.valueSum / currentState.timeSum : 0;
+        var nextRatio = timeSum > 0 ? valueSum / timeSum : 0;
+        if (nextRatio > currentRatio + EPS) {
+            return true;
+        }
+        if (Math.abs(nextRatio - currentRatio) > EPS) {
+            return false;
+        }
+        if (valueSum > currentState.valueSum + EPS) {
+            return true;
+        }
+        if (Math.abs(valueSum - currentState.valueSum) <= EPS && timeSum < currentState.timeSum - EPS) {
+            return true;
+        }
+        return false;
+    }
+
+    function prepareJadeCandidates(candidates, requiredRunes, totalGuestRate, totalTimeBonus) {
+        var requiredBitByRune = {};
+        var requiredRuneByBit = {};
+        var nextBit = 1;
+        var preparedCandidates = [];
+
+        for (var i = 0; i < requiredRunes.length; i++) {
+            requiredBitByRune[requiredRunes[i]] = nextBit;
+            requiredRuneByBit[nextBit] = requiredRunes[i];
+            nextBit *= 2;
+        }
+
+        for (i = 0; i < candidates.length; i++) {
+            var candidate = candidates[i];
+            var quantityResult = calculateRecipeQuantity(candidate.recipe, totalGuestRate, false);
+            var quantityForTime = quantityResult.canAchieveBilai ? quantityResult.quantity : quantityResult.maxQuantity;
+            var cookingTime = calculateCookingTime(candidate.recipe.time || 0, quantityForTime, totalTimeBonus);
+            var requiredBits = [];
+
+            for (var r = 0; r < candidate.runeOptions.length; r++) {
+                var bit = requiredBitByRune[candidate.runeOptions[r]];
+                if (bit && requiredBits.indexOf(bit) === -1) {
+                    requiredBits.push(bit);
+                }
+            }
+
+            preparedCandidates.push({
+                recipe: candidate.recipe,
+                runeOptions: candidate.runeOptions.slice(),
+                eligibleAssignments: candidate.eligibleAssignments,
+                jadeValue: getJadeRecipeValue(candidate.recipe.name),
+                quantity: quantityResult.quantity,
+                quantityForTime: quantityForTime,
+                canAchieveBilai: quantityResult.canAchieveBilai,
+                requiredPortions: quantityResult.requiredPortions,
+                maxQuantity: quantityResult.maxQuantity,
+                cookingTime: cookingTime,
+                requiredBits: requiredBits
+            });
+        }
+
+        return {
+            preparedCandidates: preparedCandidates,
+            requiredMask: nextBit - 1,
+            requiredRuneByBit: requiredRuneByBit
+        };
+    }
+
+    function getJadeCandidateBestRank(candidate) {
+        if (!candidate || !candidate.eligibleAssignments || !candidate.eligibleAssignments.length) {
+            return 99;
+        }
+        return candidate.eligibleAssignments[0].rank || 99;
+    }
+
+    function getJadeCandidateEfficiency(candidate) {
+        if (!candidate || !candidate.cookingTime || candidate.cookingTime <= 0) {
+            return 0;
+        }
+        return candidate.jadeValue / candidate.cookingTime;
+    }
+
+    function compareJadeCandidatePriority(a, b) {
+        var efficiencyDiff = getJadeCandidateEfficiency(b) - getJadeCandidateEfficiency(a);
+        if (Math.abs(efficiencyDiff) > 1e-12) {
+            return efficiencyDiff;
+        }
+
+        var rankDiff = getJadeCandidateBestRank(a) - getJadeCandidateBestRank(b);
+        if (rankDiff !== 0) {
+            return rankDiff;
+        }
+
+        var jadeDiff = (b.jadeValue || 0) - (a.jadeValue || 0);
+        if (jadeDiff !== 0) {
+            return jadeDiff;
+        }
+
+        var timeDiff = (a.cookingTime || 0) - (b.cookingTime || 0);
+        if (timeDiff !== 0) {
+            return timeDiff;
+        }
+
+        return String(a.recipe && a.recipe.name || '').localeCompare(String(b.recipe && b.recipe.name || ''));
+    }
+
+    function getBestAvailableChefAssignment(candidate, chefLoads) {
+        if (!candidate || !candidate.eligibleAssignments) {
+            return null;
+        }
+
+        for (var i = 0; i < candidate.eligibleAssignments.length; i++) {
+            var assignment = candidate.eligibleAssignments[i];
+            if ((chefLoads[assignment.chefIndex] || 0) < 3) {
+                return assignment;
+            }
+        }
+
+        return null;
+    }
+
+    function buildJadeRuneCandidateBuckets(preparedCandidates, requiredRunes) {
+        var buckets = {};
+
+        for (var i = 0; i < requiredRunes.length; i++) {
+            buckets[requiredRunes[i]] = [];
+        }
+
+        for (i = 0; i < preparedCandidates.length; i++) {
+            var candidate = preparedCandidates[i];
+            for (var r = 0; r < candidate.runeOptions.length; r++) {
+                var rune = candidate.runeOptions[r];
+                if (buckets[rune]) {
+                    buckets[rune].push(candidate);
+                }
+            }
+        }
+
+        for (i = 0; i < requiredRunes.length; i++) {
+            buckets[requiredRunes[i]].sort(compareJadeCandidatePriority);
+        }
+
+        return buckets;
+    }
+
+    function pickNextJadeCandidateForRune(rune, runeBuckets, usedRecipeIds, chefLoads) {
+        var bucket = runeBuckets[rune] || [];
+
+        for (var i = 0; i < bucket.length; i++) {
+            var candidate = bucket[i];
+            var recipeId = candidate.recipe && candidate.recipe.recipeId;
+            if (!recipeId || usedRecipeIds[recipeId]) {
+                continue;
+            }
+
+            var assignment = getBestAvailableChefAssignment(candidate, chefLoads);
+            if (!assignment) {
+                continue;
+            }
+
+            return {
+                candidate: candidate,
+                assignment: assignment
+            };
+        }
+
+        return null;
+    }
+
+    function getPerRankGuestDropCountRequirement(chef) {
+        if (!chef) {
+            return 0;
+        }
+
+        var requiredRank = 0;
+        var effectLists = [];
+
+        if (chef.specialSkillEffect && chef.specialSkillEffect.length) {
+            effectLists.push(chef.specialSkillEffect);
+        }
+        if (chef.ultimate === "是" && chef.ultimateSkillEffect && chef.ultimateSkillEffect.length) {
+            effectLists.push(chef.ultimateSkillEffect);
+        }
+
+        for (var i = 0; i < effectLists.length; i++) {
+            var effects = effectLists[i];
+            for (var j = 0; j < effects.length; j++) {
+                var effect = effects[j];
+                if (!effect || effect.type !== 'GuestDropCount' || effect.conditionType !== 'PerRank') {
+                    continue;
+                }
+                requiredRank = Math.max(requiredRank, Number(effect.conditionValue) || 4);
+            }
+        }
+
+        return requiredRank;
+    }
+
+    function buildPerRankChefRequirementMap(enhancedChefs) {
+        var requirementMap = {};
+
+        for (var i = 0; i < enhancedChefs.length; i++) {
+            var requiredRank = getPerRankGuestDropCountRequirement(enhancedChefs[i] && enhancedChefs[i].original);
+            if (requiredRank > 0) {
+                requirementMap[i] = requiredRank;
+            }
+        }
+
+        return requirementMap;
+    }
+
+    function optimizeFixedJadeAssignments(selectedEntries, perRankChefRequirementMap) {
+        if (!selectedEntries || !selectedEntries.length) {
+            return [];
+        }
+
+        perRankChefRequirementMap = perRankChefRequirementMap || {};
+
+        var orderedEntries = selectedEntries.map(function(entry, index) {
+            return {
+                entry: entry,
+                originalIndex: index
+            };
+        });
+
+        orderedEntries.sort(function(a, b) {
+            var assignmentCountDiff = (a.entry.candidate.eligibleAssignments.length || 0) - (b.entry.candidate.eligibleAssignments.length || 0);
+            if (assignmentCountDiff !== 0) {
+                return assignmentCountDiff;
+            }
+            return compareJadeCandidatePriority(a.entry.candidate, b.entry.candidate);
+        });
+
+        var memo = {};
+
+        function dfs(position, loadCode) {
+            if (position >= orderedEntries.length) {
+                return {
+                    qualifyingCount: 0,
+                    nonPriorityRankSum: 0,
+                    rankSum: 0,
+                    next: null
+                };
+            }
+
+            var memoKey = position + ':' + loadCode;
+            if (memo[memoKey]) {
+                return memo[memoKey];
+            }
+
+            var loads = decodeChefLoadCode(loadCode);
+            var candidate = orderedEntries[position].entry.candidate;
+            var best = null;
+
+            for (var i = 0; i < candidate.eligibleAssignments.length; i++) {
+                var assignment = candidate.eligibleAssignments[i];
+                if (loads[assignment.chefIndex] >= 3) {
+                    continue;
+                }
+
+                var nextLoads = loads.slice();
+                nextLoads[assignment.chefIndex]++;
+                var nextLoadCode = encodeChefLoadCode(nextLoads[0], nextLoads[1], nextLoads[2]);
+                var nextResult = dfs(position + 1, nextLoadCode);
+                if (!nextResult) {
+                    continue;
+                }
+
+                var priorityRequiredRank = perRankChefRequirementMap[assignment.chefIndex] || 0;
+                var qualifyingCount = nextResult.qualifyingCount + (priorityRequiredRank > 0 && assignment.rank >= priorityRequiredRank ? 1 : 0);
+                var nonPriorityRankSum = nextResult.nonPriorityRankSum + (priorityRequiredRank > 0 ? 0 : assignment.rank);
+                var totalRankSum = assignment.rank + nextResult.rankSum;
+                if (!best ||
+                    qualifyingCount > best.qualifyingCount ||
+                    (qualifyingCount === best.qualifyingCount && nonPriorityRankSum < best.nonPriorityRankSum) ||
+                    (qualifyingCount === best.qualifyingCount && nonPriorityRankSum === best.nonPriorityRankSum && totalRankSum < best.rankSum) ||
+                    (qualifyingCount === best.qualifyingCount && nonPriorityRankSum === best.nonPriorityRankSum && totalRankSum === best.rankSum && assignment.chefIndex < best.assignment.chefIndex)) {
+                    best = {
+                        qualifyingCount: qualifyingCount,
+                        nonPriorityRankSum: nonPriorityRankSum,
+                        rankSum: totalRankSum,
+                        assignment: assignment,
+                        nextLoadCode: nextLoadCode,
+                        next: nextResult
+                    };
+                }
+            }
+
+            memo[memoKey] = best;
+            return best;
+        }
+
+        var solved = dfs(0, encodeChefLoadCode(0, 0, 0));
+        if (!solved) {
+            return null;
+        }
+
+        var results = new Array(selectedEntries.length);
+        var currentLoadCode = encodeChefLoadCode(0, 0, 0);
+
+        for (var pos = 0; pos < orderedEntries.length; pos++) {
+            var current = memo[pos + ':' + currentLoadCode];
+            if (!current || !current.assignment) {
+                return null;
+            }
+
+            results[orderedEntries[pos].originalIndex] = {
+                chefIndex: current.assignment.chefIndex,
+                rank: current.assignment.rank
+            };
+            currentLoadCode = current.nextLoadCode;
+        }
+
+        return results;
+    }
+
+    function findFastestQualifyingSupplementRecipe(allRecipes, enhancedChef, requiredRank, usedRecipeIds, onlyShowOwned) {
+        if (!allRecipes || !enhancedChef || requiredRank <= 0) {
+            return null;
+        }
+
+        var bestRecipe = null;
+        var bestRank = 0;
+
+        for (var i = 0; i < allRecipes.length; i++) {
+            var recipe = allRecipes[i];
+            if (!recipe || !recipe.recipeId) {
+                continue;
+            }
+            if (usedRecipeIds[recipe.recipeId]) {
+                continue;
+            }
+            if (onlyShowOwned && recipe.got !== "是") {
+                continue;
+            }
+
+            var rank = getRecipeRank(enhancedChef, recipe);
+            if (rank < requiredRank) {
+                continue;
+            }
+            if (hasDivineRecipeSkill(enhancedChef) && rank < 4) {
+                continue;
+            }
+
+            if (!bestRecipe || (recipe.time || 0) < (bestRecipe.time || 0) ||
+                ((recipe.time || 0) === (bestRecipe.time || 0) && rank < bestRank)) {
+                bestRecipe = recipe;
+                bestRank = rank;
+            }
+        }
+
+        if (!bestRecipe) {
+            return null;
+        }
+
+        return {
+            recipe: bestRecipe,
+            rank: bestRank
+        };
+    }
+
+    function supplementPerRankChefSelections(selections, enhancedChefs, allRecipes, onlyShowOwned, totalGuestRate, totalTimeBonus) {
+        if (!selections || !selections.length || !enhancedChefs || !enhancedChefs.length) {
+            return selections || [];
+        }
+
+        var requirementMap = buildPerRankChefRequirementMap(enhancedChefs);
+        var chefRecipeCounts = [0, 0, 0];
+        var usedRecipeIds = {};
+
+        for (var i = 0; i < selections.length; i++) {
+            var selection = selections[i];
+            usedRecipeIds[selection.recipe.recipeId] = true;
+            chefRecipeCounts[selection.chefIndex] = (chefRecipeCounts[selection.chefIndex] || 0) + 1;
+        }
+
+        for (var chefIndex in requirementMap) {
+            if (!requirementMap.hasOwnProperty(chefIndex)) {
+                continue;
+            }
+            var numericChefIndex = Number(chefIndex);
+            var requiredRank = requirementMap[chefIndex];
+
+            while ((chefRecipeCounts[numericChefIndex] || 0) < 3) {
+                var supplement = findFastestQualifyingSupplementRecipe(
+                    allRecipes,
+                    enhancedChefs[numericChefIndex].enhanced,
+                    requiredRank,
+                    usedRecipeIds,
+                    onlyShowOwned
+                );
+                if (!supplement) {
+                    break;
+                }
+
+                selections.push({
+                    recipe: supplement.recipe,
+                    chefIndex: numericChefIndex,
+                    rank: supplement.rank,
+                    rune: null,
+                    quantity: 1,
+                    quantityForTime: 1,
+                    cookingTime: calculateCookingTime(supplement.recipe.time || 0, 1, totalTimeBonus),
+                    canAchieveBilai: true,
+                    requiredPortions: 1,
+                    maxQuantity: 1,
+                    jadeValue: getJadeRecipeValue(supplement.recipe.name),
+                    runeOptions: [],
+                    isFullPoolSupplement: true
+                });
+                usedRecipeIds[supplement.recipe.recipeId] = true;
+                chefRecipeCounts[numericChefIndex] = (chefRecipeCounts[numericChefIndex] || 0) + 1;
+            }
+        }
+
+        return selections;
+    }
+
+    function supplementPerRankChefRecipesInPlace(enhancedChefs, allRecipes, onlyShowOwned) {
+        if (!enhancedChefs || !enhancedChefs.length) {
+            return;
+        }
+
+        var requirementMap = buildPerRankChefRequirementMap(enhancedChefs);
+        var usedRecipeIds = {};
+
+        for (var i = 0; i < enhancedChefs.length; i++) {
+            var currentRecipes = enhancedChefs[i].recipes || [];
+            for (var j = 0; j < currentRecipes.length; j++) {
+                if (currentRecipes[j] && currentRecipes[j].recipe && currentRecipes[j].recipe.recipeId) {
+                    usedRecipeIds[currentRecipes[j].recipe.recipeId] = true;
+                }
+            }
+        }
+
+        for (var chefIndexKey in requirementMap) {
+            if (!requirementMap.hasOwnProperty(chefIndexKey)) {
+                continue;
+            }
+            var chefIndex = Number(chefIndexKey);
+            var chefData = enhancedChefs[chefIndex];
+            if (!chefData) {
+                continue;
+            }
+
+            while ((chefData.recipes || []).length < 3) {
+                var supplement = findFastestQualifyingSupplementRecipe(
+                    allRecipes,
+                    chefData.enhanced,
+                    requirementMap[chefIndexKey],
+                    usedRecipeIds,
+                    onlyShowOwned
+                );
+                if (!supplement) {
+                    break;
+                }
+
+                chefData.recipes.push({
+                    recipe: supplement.recipe,
+                    rank: supplement.rank,
+                    rune: null,
+                    isFullPoolSupplement: true
+                });
+                usedRecipeIds[supplement.recipe.recipeId] = true;
+            }
+        }
+    }
+
+    function getSelectionJadeEfficiency(selection) {
+        if (!selection || !selection.cookingTime) {
+            return 0;
+        }
+        return (selection.jadeValue || 0) / selection.cookingTime;
+    }
+
+    function rebalancePerRankSelectionsToOtherChefs(selections, enhancedChefs, perRankChefRequirementMap) {
+        if (!selections || !selections.length || !enhancedChefs || !enhancedChefs.length) {
+            return selections || [];
+        }
+
+        perRankChefRequirementMap = perRankChefRequirementMap || {};
+        var usageState = rebuildJadeSelectionUsage(selections);
+        var targetChefIndexes = [];
+
+        for (var chefIndex = 0; chefIndex < enhancedChefs.length; chefIndex++) {
+            if (!perRankChefRequirementMap.hasOwnProperty(String(chefIndex)) && !perRankChefRequirementMap.hasOwnProperty(chefIndex)) {
+                targetChefIndexes.push(chefIndex);
+            }
+        }
+
+        if (!targetChefIndexes.length) {
+            return selections;
+        }
+
+        var moveCandidates = selections
+            .map(function(selection, index) {
+                return {
+                    selection: selection,
+                    index: index
+                };
+            })
+            .filter(function(item) {
+                return perRankChefRequirementMap.hasOwnProperty(String(item.selection.chefIndex)) ||
+                    perRankChefRequirementMap.hasOwnProperty(item.selection.chefIndex);
+            });
+
+        moveCandidates.sort(function(a, b) {
+            var efficiencyDiff = getSelectionJadeEfficiency(b.selection) - getSelectionJadeEfficiency(a.selection);
+            if (Math.abs(efficiencyDiff) > 1e-12) {
+                return efficiencyDiff;
+            }
+            return (a.selection.cookingTime || 0) - (b.selection.cookingTime || 0);
+        });
+
+        function findMoveTarget(recipe, currentChefIndex) {
+            var bestTarget = null;
+
+            for (var i = 0; i < targetChefIndexes.length; i++) {
+                var targetChefIndex = targetChefIndexes[i];
+                if (targetChefIndex === currentChefIndex) {
+                    continue;
+                }
+                if ((usageState.chefLoads[targetChefIndex] || 0) >= 3) {
+                    continue;
+                }
+
+                var enhancedChef = enhancedChefs[targetChefIndex] && enhancedChefs[targetChefIndex].enhanced;
+                var rank = getRecipeRank(enhancedChef, recipe);
+                if (rank <= 0) {
+                    continue;
+                }
+                if (hasDivineRecipeSkill(enhancedChef) && rank < 4) {
+                    continue;
+                }
+
+                if (!bestTarget ||
+                    (usageState.chefLoads[targetChefIndex] || 0) < (usageState.chefLoads[bestTarget.chefIndex] || 0) ||
+                    ((usageState.chefLoads[targetChefIndex] || 0) === (usageState.chefLoads[bestTarget.chefIndex] || 0) && rank < bestTarget.rank) ||
+                    ((usageState.chefLoads[targetChefIndex] || 0) === (usageState.chefLoads[bestTarget.chefIndex] || 0) && rank === bestTarget.rank && targetChefIndex < bestTarget.chefIndex)) {
+                    bestTarget = {
+                        chefIndex: targetChefIndex,
+                        rank: rank
+                    };
+                }
+            }
+
+            return bestTarget;
+        }
+
+        for (var mc = 0; mc < moveCandidates.length; mc++) {
+            var item = moveCandidates[mc];
+            var currentSelection = selections[item.index];
+            var moveTarget = findMoveTarget(currentSelection.recipe, currentSelection.chefIndex);
+            if (!moveTarget) {
+                continue;
+            }
+
+            usageState.chefLoads[currentSelection.chefIndex] = Math.max(0, (usageState.chefLoads[currentSelection.chefIndex] || 0) - 1);
+            usageState.chefLoads[moveTarget.chefIndex] = (usageState.chefLoads[moveTarget.chefIndex] || 0) + 1;
+            currentSelection.chefIndex = moveTarget.chefIndex;
+            currentSelection.rank = moveTarget.rank;
+
+            var allTargetsFull = true;
+            for (var tc = 0; tc < targetChefIndexes.length; tc++) {
+                if ((usageState.chefLoads[targetChefIndexes[tc]] || 0) < 3) {
+                    allTargetsFull = false;
+                    break;
+                }
+            }
+            if (allTargetsFull) {
+                break;
+            }
+        }
+
+        return selections;
+    }
+
+    function rebuildJadeSelectionUsage(selections) {
+        var chefLoads = [0, 0, 0];
+        var usedRecipeIds = {};
+        var totalTimeSum = 0;
+        var totalValueSum = 0;
+
+        for (var i = 0; i < selections.length; i++) {
+            var selection = selections[i];
+            if (selection.recipe && selection.recipe.recipeId) {
+                usedRecipeIds[selection.recipe.recipeId] = true;
+            }
+            chefLoads[selection.chefIndex] = (chefLoads[selection.chefIndex] || 0) + 1;
+            totalTimeSum += selection.cookingTime || 0;
+            totalValueSum += selection.jadeValue || 0;
+        }
+
+        return {
+            chefLoads: chefLoads,
+            usedRecipeIds: usedRecipeIds,
+            totalTimeSum: totalTimeSum,
+            totalValueSum: totalValueSum
+        };
+    }
+
+    function pickBestPreparedCandidateForChef(preparedCandidates, chefIndex, minRank, usedRecipeIds, chefLoads) {
+        var best = null;
+
+        for (var i = 0; i < preparedCandidates.length; i++) {
+            var candidate = preparedCandidates[i];
+            var recipeId = candidate.recipe && candidate.recipe.recipeId;
+            if (!recipeId || usedRecipeIds[recipeId]) {
+                continue;
+            }
+            if ((chefLoads[chefIndex] || 0) >= 3) {
+                continue;
+            }
+
+            var matchedAssignment = null;
+            for (var j = 0; j < candidate.eligibleAssignments.length; j++) {
+                var assignment = candidate.eligibleAssignments[j];
+                if (assignment.chefIndex === chefIndex && assignment.rank >= minRank) {
+                    matchedAssignment = assignment;
+                    break;
+                }
+            }
+
+            if (!matchedAssignment) {
+                continue;
+            }
+
+            if (!best || compareJadeCandidatePriority(candidate, best.candidate) < 0) {
+                best = {
+                    candidate: candidate,
+                    assignment: matchedAssignment
+                };
+            }
+        }
+
+        return best;
+    }
+
+    function pickBestPreparedCandidateGlobal(preparedCandidates, usedRecipeIds, chefLoads) {
+        var best = null;
+
+        for (var i = 0; i < preparedCandidates.length; i++) {
+            var candidate = preparedCandidates[i];
+            var recipeId = candidate.recipe && candidate.recipe.recipeId;
+            if (!recipeId || usedRecipeIds[recipeId]) {
+                continue;
+            }
+
+            var assignment = getBestAvailableChefAssignment(candidate, chefLoads);
+            if (!assignment) {
+                continue;
+            }
+
+            if (!best || compareJadeCandidatePriority(candidate, best.candidate) < 0) {
+                best = {
+                    candidate: candidate,
+                    assignment: assignment
+                };
+            }
+        }
+
+        return best;
+    }
+
+    function supplementSelectionsWithPreparedCandidate(selections, pickResult, rune, usageState) {
+        if (!pickResult || !pickResult.candidate || !pickResult.assignment) {
+            return false;
+        }
+
+        selections.push({
+            recipe: pickResult.candidate.recipe,
+            chefIndex: pickResult.assignment.chefIndex,
+            rank: pickResult.assignment.rank,
+            rune: rune || null,
+            quantity: pickResult.candidate.quantity,
+            quantityForTime: pickResult.candidate.quantityForTime,
+            cookingTime: pickResult.candidate.cookingTime,
+            canAchieveBilai: pickResult.candidate.canAchieveBilai,
+            requiredPortions: pickResult.candidate.requiredPortions,
+            maxQuantity: pickResult.candidate.maxQuantity,
+            jadeValue: pickResult.candidate.jadeValue,
+            runeOptions: pickResult.candidate.runeOptions.slice()
+        });
+
+        usageState.usedRecipeIds[pickResult.candidate.recipe.recipeId] = true;
+        usageState.chefLoads[pickResult.assignment.chefIndex] = (usageState.chefLoads[pickResult.assignment.chefIndex] || 0) + 1;
+        usageState.totalTimeSum += pickResult.candidate.cookingTime || 0;
+        usageState.totalValueSum += pickResult.candidate.jadeValue || 0;
+        return true;
+    }
+
+    function solveJadeCombinationForLambda(preparedCandidates, requiredMask, lambda) {
+        var stateSize = 64 * 64;
+        var states = new Array(stateSize);
+        states[0] = {
+            score: 0,
+            valueSum: 0,
+            timeSum: 0,
+            rankSum: 0,
+            prevState: null,
+            action: null
+        };
+
+        for (var i = 0; i < preparedCandidates.length; i++) {
+            var candidate = preparedCandidates[i];
+            var nextStates = states.slice();
+            var candidateScore = candidate.jadeValue - lambda * candidate.cookingTime;
+
+            for (var stateIndex = 0; stateIndex < states.length; stateIndex++) {
+                var state = states[stateIndex];
+                if (!state) {
+                    continue;
+                }
+
+                var coverageMask = Math.floor(stateIndex / 64);
+                var loadCode = stateIndex % 64;
+                var loads = decodeChefLoadCode(loadCode);
+
+                for (var ea = 0; ea < candidate.eligibleAssignments.length; ea++) {
+                    var assignment = candidate.eligibleAssignments[ea];
+                    if (loads[assignment.chefIndex] >= 3) {
+                        continue;
+                    }
+
+                    var nextLoad0 = loads[0];
+                    var nextLoad1 = loads[1];
+                    var nextLoad2 = loads[2];
+                    if (assignment.chefIndex === 0) nextLoad0++;
+                    else if (assignment.chefIndex === 1) nextLoad1++;
+                    else nextLoad2++;
+
+                    var nextLoadCode = encodeChefLoadCode(nextLoad0, nextLoad1, nextLoad2);
+                    var coverChoices = [0];
+                    for (var rb = 0; rb < candidate.requiredBits.length; rb++) {
+                        var coverBit = candidate.requiredBits[rb];
+                        if ((coverageMask & coverBit) === 0) {
+                            coverChoices.push(coverBit);
+                        }
+                    }
+
+                    for (var cc = 0; cc < coverChoices.length; cc++) {
+                        var selectedCoverBit = coverChoices[cc];
+                        var nextCoverageMask = coverageMask | selectedCoverBit;
+                        var nextStateIndex = nextCoverageMask * 64 + nextLoadCode;
+                        var nextScore = state.score + candidateScore;
+                        var nextValueSum = state.valueSum + candidate.jadeValue;
+                        var nextTimeSum = state.timeSum + candidate.cookingTime;
+                        var nextRankSum = state.rankSum + assignment.rank;
+
+                        if (!shouldReplaceJadeState(nextStates[nextStateIndex], nextScore, nextValueSum, nextTimeSum, nextRankSum)) {
+                            continue;
+                        }
+
+                        nextStates[nextStateIndex] = {
+                            score: nextScore,
+                            valueSum: nextValueSum,
+                            timeSum: nextTimeSum,
+                            rankSum: nextRankSum,
+                            prevState: state,
+                            action: {
+                                candidateIndex: i,
+                                chefIndex: assignment.chefIndex,
+                                rank: assignment.rank,
+                                coverBit: selectedCoverBit
+                            }
+                        };
+                    }
+                }
+            }
+
+            states = nextStates;
+        }
+
+        var bestState = null;
+        for (var loadIndex = 0; loadIndex < 64; loadIndex++) {
+            var finalState = states[requiredMask * 64 + loadIndex];
+            if (!finalState) {
+                continue;
+            }
+            if (shouldReplaceJadeState(bestState, finalState.score, finalState.valueSum, finalState.timeSum, finalState.rankSum)) {
+                bestState = finalState;
+            }
+        }
+
+        return bestState;
+    }
+
+    function optimizeJadeRecipeCombination(candidates, requiredRunes, totalGuestRate, totalTimeBonus, groupStats, timeLimitSeconds, enhancedChefs, allRecipes, onlyShowOwned) {
+        if (!candidates.length) {
+            return null;
+        }
+
+        var prepared = prepareJadeCandidates(candidates, requiredRunes, totalGuestRate, totalTimeBonus);
+        var preparedCandidates = prepared.preparedCandidates || [];
+        if (!preparedCandidates.length) {
+            return null;
+        }
+
+        var runeBuckets = buildJadeRuneCandidateBuckets(preparedCandidates, requiredRunes);
+        var chefLoads = [0, 0, 0];
+        var usedRecipeIds = {};
+        var runeAssignedCounts = {};
+        var selections = [];
+        var totalTimeSum = 0;
+        var totalValueSum = 0;
+        var maxSelections = 9;
+        var singleRecipePerRune = settings.singleRecipePerRune === true;
+        var selectedEntries = [];
+        var perRankChefRequirementMap = buildPerRankChefRequirementMap(enhancedChefs || []);
+        var i;
+
+        for (i = 0; i < requiredRunes.length; i++) {
+            runeAssignedCounts[requiredRunes[i]] = 0;
+        }
+
+        // 第一轮：每个符文先保底一菜
+        for (i = 0; i < requiredRunes.length; i++) {
+            var rune = requiredRunes[i];
+            var basePick = pickNextJadeCandidateForRune(rune, runeBuckets, usedRecipeIds, chefLoads);
+            if (!basePick) {
+                return null;
+            }
+
+            usedRecipeIds[basePick.candidate.recipe.recipeId] = true;
+            chefLoads[basePick.assignment.chefIndex]++;
+            runeAssignedCounts[rune]++;
+            selectedEntries.push({
+                candidate: basePick.candidate,
+                rune: rune,
+                initialAssignment: {
+                    chefIndex: basePick.assignment.chefIndex,
+                    rank: basePick.assignment.rank
+                }
+            });
+            totalTimeSum += basePick.candidate.cookingTime;
+            totalValueSum += basePick.candidate.jadeValue;
+
+            if (selectedEntries.length >= maxSelections) {
+                break;
+            }
+        }
+
+        // 第二轮起：在“当前菜谱数量最少”的符文中，选效率最高的下一道菜
+        while (!singleRecipePerRune && totalTimeSum < timeLimitSeconds && selectedEntries.length < maxSelections) {
+            var availableCounts = [];
+            for (i = 0; i < requiredRunes.length; i++) {
+                var currentRune = requiredRunes[i];
+                var nextPickPreview = pickNextJadeCandidateForRune(currentRune, runeBuckets, usedRecipeIds, chefLoads);
+                if (nextPickPreview) {
+                    availableCounts.push(runeAssignedCounts[currentRune] || 0);
+                }
+            }
+
+            if (!availableCounts.length) {
+                break;
+            }
+
+            availableCounts.sort(function(a, b) {
+                return a - b;
+            });
+
+            var chosenSupplementPick = null;
+
+            for (var levelIndex = 0; levelIndex < availableCounts.length; levelIndex++) {
+                var targetCount = availableCounts[levelIndex];
+                var supplementOptions = [];
+
+                for (i = 0; i < requiredRunes.length; i++) {
+                    var supplementRune = requiredRunes[i];
+                    if ((runeAssignedCounts[supplementRune] || 0) !== targetCount) {
+                        continue;
+                    }
+
+                    var supplementPick = pickNextJadeCandidateForRune(supplementRune, runeBuckets, usedRecipeIds, chefLoads);
+                    if (supplementPick) {
+                        supplementOptions.push({
+                            rune: supplementRune,
+                            pick: supplementPick
+                        });
+                    }
+                }
+
+                if (!supplementOptions.length) {
+                    continue;
+                }
+
+                supplementOptions.sort(function(a, b) {
+                    return compareJadeCandidatePriority(a.pick.candidate, b.pick.candidate);
+                });
+                chosenSupplementPick = supplementOptions[0];
+                break;
+            }
+
+            if (!chosenSupplementPick) {
+                break;
+            }
+
+            usedRecipeIds[chosenSupplementPick.pick.candidate.recipe.recipeId] = true;
+            chefLoads[chosenSupplementPick.pick.assignment.chefIndex]++;
+            runeAssignedCounts[chosenSupplementPick.rune]++;
+            selectedEntries.push({
+                candidate: chosenSupplementPick.pick.candidate,
+                rune: chosenSupplementPick.rune,
+                initialAssignment: {
+                    chefIndex: chosenSupplementPick.pick.assignment.chefIndex,
+                    rank: chosenSupplementPick.pick.assignment.rank
+                }
+            });
+            totalTimeSum += chosenSupplementPick.pick.candidate.cookingTime;
+            totalValueSum += chosenSupplementPick.pick.candidate.jadeValue;
+        }
+
+        if (!selectedEntries.length || totalTimeSum <= 0) {
+            return null;
+        }
+
+        var optimizedAssignments = optimizeFixedJadeAssignments(selectedEntries, perRankChefRequirementMap);
+        for (i = 0; i < selectedEntries.length; i++) {
+            var selectedEntry = selectedEntries[i];
+            var finalAssignment = optimizedAssignments && optimizedAssignments[i]
+                ? optimizedAssignments[i]
+                : selectedEntry.initialAssignment;
+
+            selections.push({
+                recipe: selectedEntry.candidate.recipe,
+                chefIndex: finalAssignment.chefIndex,
+                rank: finalAssignment.rank,
+                rune: selectedEntry.rune,
+                quantity: selectedEntry.candidate.quantity,
+                quantityForTime: selectedEntry.candidate.quantityForTime,
+                cookingTime: selectedEntry.candidate.cookingTime,
+                canAchieveBilai: selectedEntry.candidate.canAchieveBilai,
+                requiredPortions: selectedEntry.candidate.requiredPortions,
+                maxQuantity: selectedEntry.candidate.maxQuantity,
+                jadeValue: selectedEntry.candidate.jadeValue,
+                runeOptions: selectedEntry.candidate.runeOptions.slice(),
+                isFullPoolSupplement: false
+            });
+        }
+
+        var usageState = rebuildJadeSelectionUsage(selections);
+        var hasPerRankChefs = Object.keys(perRankChefRequirementMap).length > 0;
+        var perRankRuneExhausted = false;
+
+        // 第一段补充：优先给 PerRank 厨师补 conditionValue 达标的符文菜谱
+        if (!singleRecipePerRune && hasPerRankChefs) {
+            while (usageState.totalTimeSum < timeLimitSeconds && selections.length < maxSelections) {
+                var bestPerRankRunePick = null;
+                var bestPerRankRuneKey = null;
+
+                for (var chefIndexKey in perRankChefRequirementMap) {
+                    if (!perRankChefRequirementMap.hasOwnProperty(chefIndexKey)) {
+                        continue;
+                    }
+                    var perRankChefIndex = Number(chefIndexKey);
+                    if ((usageState.chefLoads[perRankChefIndex] || 0) >= 3) {
+                        continue;
+                    }
+
+                    var perRankPick = pickBestPreparedCandidateForChef(
+                        preparedCandidates,
+                        perRankChefIndex,
+                        perRankChefRequirementMap[chefIndexKey],
+                        usageState.usedRecipeIds,
+                        usageState.chefLoads
+                    );
+
+                    if (!perRankPick) {
+                        continue;
+                    }
+
+                    if (!bestPerRankRunePick || compareJadeCandidatePriority(perRankPick.candidate, bestPerRankRunePick.candidate) < 0) {
+                        bestPerRankRunePick = perRankPick;
+                        bestPerRankRuneKey = chefIndexKey;
+                    }
+                }
+
+                if (!bestPerRankRunePick) {
+                    perRankRuneExhausted = true;
+                    break;
+                }
+
+                supplementSelectionsWithPreparedCandidate(
+                    selections,
+                    bestPerRankRunePick,
+                    bestPerRankRunePick.candidate.runeOptions && bestPerRankRunePick.candidate.runeOptions.length ? bestPerRankRunePick.candidate.runeOptions[0] : null,
+                    usageState
+                );
+            }
+        }
+
+        if (!singleRecipePerRune && hasPerRankChefs && usageState.totalTimeSum >= timeLimitSeconds) {
+            selections = rebalancePerRankSelectionsToOtherChefs(
+                selections,
+                enhancedChefs || [],
+                perRankChefRequirementMap
+            );
+            usageState = rebuildJadeSelectionUsage(selections);
+        }
+
+        // 第二段补充：如果时间达标，或者 PerRank 没有可补的达标符文菜，就用全菜谱给 PerRank 厨师补位
+        if (hasPerRankChefs && (singleRecipePerRune || usageState.totalTimeSum >= timeLimitSeconds || perRankRuneExhausted)) {
+            selections = supplementPerRankChefSelections(
+                selections,
+                enhancedChefs || [],
+                allRecipes || [],
+                onlyShowOwned,
+                totalGuestRate,
+                totalTimeBonus
+            );
+            usageState = rebuildJadeSelectionUsage(selections);
+        }
+
+        // 第三段补充：如果时间还没达标，再按日均玉璧效率给全队补符文菜谱
+        while (!singleRecipePerRune && usageState.totalTimeSum < timeLimitSeconds && selections.length < maxSelections) {
+            var bestGeneralRunePick = pickBestPreparedCandidateGlobal(
+                preparedCandidates,
+                usageState.usedRecipeIds,
+                usageState.chefLoads
+            );
+
+            if (!bestGeneralRunePick) {
+                break;
+            }
+
+            supplementSelectionsWithPreparedCandidate(selections, bestGeneralRunePick, null, usageState);
+        }
+
+        totalTimeSum = usageState.totalTimeSum;
+        totalValueSum = usageState.totalValueSum;
+
+        var actualGuestRate = groupStats ? (groupStats.actualGuestRate || 0) : 0;
+        var critRate = groupStats ? (groupStats.critRate || 0) : 0;
+        var scatterRate = Math.max(0, 100 - (groupStats ? (groupStats.runeRate || 0) : 0));
+        var dailyCycles = totalTimeSum > 0 ? 86400 / totalTimeSum : 0;
+        var dailyJade = dailyCycles * (actualGuestRate / 100) * (scatterRate / 100) * (critRate / 100) * totalValueSum;
+
+        return {
+            selections: selections,
+            totalCookingTime: totalTimeSum,
+            recipeJadeValueTotal: totalValueSum,
+            dailyJade: dailyJade,
+            scatterRate: scatterRate,
+            dailyCycles: dailyCycles
+        };
+    }
+
+    function calculateJadeGroupScreenScore(groupStats) {
+        if (!groupStats) {
+            return 0;
+        }
+
+        var actualGuestRate = groupStats.actualGuestRate || 0;
+        var critRate = groupStats.critRate || 0;
+        var scatterRate = Math.max(0, 100 - (groupStats.runeRate || 0));
+        var timePercentage = Math.max(groupStats.timeBonus || 0, 0.01);
+
+        return actualGuestRate * critRate * scatterRate / timePercentage;
+    }
+
+    function getAverageQualityLevelFromSelections(selections) {
+        if (!selections || !selections.length) {
+            return "1";
+        }
+
+        var rankSum = 0;
+        var rankCount = 0;
+
+        for (var i = 0; i < selections.length; i++) {
+            var selection = selections[i];
+            if (!selection || selection.isFullPoolSupplement) {
+                continue;
+            }
+
+            var rank = Number(selection.rank) || 0;
+            if (rank <= 0) {
+                continue;
+            }
+
+            rankSum += rank;
+            rankCount++;
+        }
+
+        if (!rankCount) {
+            return "1";
+        }
+
+        var averageRank = rankSum / rankCount;
+        var qualityLevel = Math.floor(averageRank);
+        if (qualityLevel < 1) qualityLevel = 1;
+        if (qualityLevel > 5) qualityLevel = 5;
+        return String(qualityLevel);
+    }
+
+    function getJadeGroupEvalLimit(selectedRuneCount, totalGroupCount) {
+        var runeCount = Math.max(1, parseInt(selectedRuneCount, 10) || 1);
+        var dynamicLimit = Math.floor(50 / Math.sqrt(runeCount));
+        if (runeCount >= 4) {
+            dynamicLimit = Math.min(dynamicLimit, 20);
+        }
+        if (runeCount >= 5) {
+            dynamicLimit = Math.min(dynamicLimit, 16);
+        }
+        if (runeCount >= 6) {
+            dynamicLimit = Math.min(dynamicLimit, 12);
+        }
+        dynamicLimit = Math.max(8, dynamicLimit);
+        return Math.min(totalGroupCount, dynamicLimit);
+    }
+
     // ========================================
     // 一键查询主函数
     // ========================================
@@ -1156,6 +2758,7 @@ var OneClickQuery = (function($) {
             
             
             loadSettings();
+            var isJadeMode = isJadeQueryMode();
             
             // ========================================
             // 检查场上是否已有厨师配置
@@ -1245,12 +2848,13 @@ var OneClickQuery = (function($) {
             }
             
             var selectedRunes = getSelectedRunes();
+            var jadeBaseRecipeData = null;
             
             // 即使没有选择符文，也继续执行厨师筛选，只是跳过菜谱分配
             var hasSelectedRunes = selectedRunes.length > 0;
             
-            if (hasSelectedRunes) {
-            } else {
+            if (hasSelectedRunes && isJadeMode) {
+                jadeBaseRecipeData = buildJadeRecipeBaseData(selectedRunes, recipes, gameData, onlyShowOwned);
             }
             
             // 读取页面上的"已配遗玉"、"已配厨具"和"默认满级心法盘"开关状态
@@ -1297,6 +2901,7 @@ var OneClickQuery = (function($) {
             // 第一阶段：厨师组合筛选
             // 如果场上已有厨师，跳过筛选，直接使用场上配置
             // ========================================
+            var chefCandidateLimitPerCategory = isJadeMode ? 10 : 3;
             if (useExistingChefs) {
                 // 使用场上已有的厨师配置
                 finalChefs = existingChefs;
@@ -1433,7 +3038,7 @@ var OneClickQuery = (function($) {
                 var guestRate = chefSkills ? (chefSkills.skillValues.guestRate || 0) : 0;
             }
             var step1Count = 0;
-            for (var i = 0; i < step1Chefs.length && step1Count < 3; i++) {
+            for (var i = 0; i < step1Chefs.length && step1Count < chefCandidateLimitPerCategory; i++) {
                 var chef = step1Chefs[i];
                 if (!selectedChefIds[chef.chefId]) {
                     allSelectedChefs.push(chef);
@@ -1460,7 +3065,7 @@ var OneClickQuery = (function($) {
                 var guestRate = chefSkills ? (chefSkills.skillValues.guestRate || 0) : 0;
             }
             var step2Count = 0;
-            for (var i = 0; i < step2Chefs.length && step2Count < 3; i++) {
+            for (var i = 0; i < step2Chefs.length && step2Count < chefCandidateLimitPerCategory; i++) {
                 var chef = step2Chefs[i];
                 if (!selectedChefIds[chef.chefId]) {
                     allSelectedChefs.push(chef);
@@ -1487,7 +3092,7 @@ var OneClickQuery = (function($) {
                 var guestRate = chefSkills ? (chefSkills.skillValues.guestRate || 0) : 0;
             }
             var step3Count = 0;
-            for (var i = 0; i < step3Chefs.length && step3Count < 3; i++) {
+            for (var i = 0; i < step3Chefs.length && step3Count < chefCandidateLimitPerCategory; i++) {
                 var chef = step3Chefs[i];
                 if (!selectedChefIds[chef.chefId]) {
                     allSelectedChefs.push(chef);
@@ -1514,7 +3119,7 @@ var OneClickQuery = (function($) {
                 var guestRate = chefSkills ? (chefSkills.skillValues.guestRate || 0) : 0;
             }
             var step4Count = 0;
-            for (var i = 0; i < step4Chefs.length && step4Count < 3; i++) {
+            for (var i = 0; i < step4Chefs.length && step4Count < chefCandidateLimitPerCategory; i++) {
                 var chef = step4Chefs[i];
                 if (!selectedChefIds[chef.chefId]) {
                     allSelectedChefs.push(chef);
@@ -1563,7 +3168,9 @@ var OneClickQuery = (function($) {
             // 调用 GuestRateCalculator.calculateFields 进行计算
             var bestGroup = null;
             var bestScore = -1; // 用于比较的分数（查询效率=单位时间，查询必来=贵客率）
+            var bestJadeScore = -1;
             var isQueryEfficiencyMode = settings.queryMode;
+            var jadeGroupCandidates = [];
             
             // 查询必来模式专用：记录能达到必来的最优组合和贵客率最高的组合
             var bestCanAchieveGroup = null; // 能达到必来的最优组合
@@ -1572,6 +3179,8 @@ var OneClickQuery = (function($) {
             var highestGuestRateGroup = null; // 贵客率最高的组合（备用，无法必来时使用）
             var highestGuestRateScore = -1;
             var highestGuestRateStats = null;
+            var highestJadeGuestRateScreenScore = -1;
+            var jadeReachedActualBilaiCandidates = [];
             var canAchieveBilai = false; // 是否有组合能达到必来
             
             // 获取选中符文对应菜谱的最高星级
@@ -1673,7 +3282,31 @@ var OneClickQuery = (function($) {
                     calcQuantity: actualQuantity       // 计算使用的份数
                 };
                 
-                if (isQueryEfficiencyMode) {
+                if (isJadeMode) {
+                    var jadeScreenScore = calculateJadeGroupScreenScore(groupStats);
+                    jadeGroupCandidates.push({
+                        group: group,
+                        groupStats: groupStats,
+                        screenScore: jadeScreenScore
+                    });
+
+                    if (!isQueryEfficiencyMode) {
+                        if (groupStats.guestRate > highestGuestRateScore ||
+                            (groupStats.guestRate === highestGuestRateScore && jadeScreenScore > highestJadeGuestRateScreenScore)) {
+                            highestGuestRateScore = groupStats.guestRate;
+                            highestGuestRateGroup = group;
+                            highestGuestRateStats = groupStats;
+                            highestJadeGuestRateScreenScore = jadeScreenScore;
+                        }
+                        if ((groupStats.actualGuestRate || 0) >= 100) {
+                            jadeReachedActualBilaiCandidates.push({
+                                group: group,
+                                groupStats: groupStats,
+                                screenScore: jadeScreenScore
+                            });
+                        }
+                    }
+                } else if (isQueryEfficiencyMode) {
                     // 查询效率模式：按单位时间最高
                     if (unitTime > bestScore) {
                         bestScore = unitTime;
@@ -1699,8 +3332,102 @@ var OneClickQuery = (function($) {
                 }
             }
             
+            if (isJadeMode) {
+                if (isQueryEfficiencyMode) {
+                    jadeGroupCandidates.sort(function(a, b) {
+                        return b.screenScore - a.screenScore;
+                    });
+
+                    var jadeGroupEvalLimit = getJadeGroupEvalLimit(
+                        jadeBaseRecipeData ? jadeBaseRecipeData.availableRunes.length : selectedRunes.length,
+                        jadeGroupCandidates.length
+                    );
+                    for (var jg = 0; jg < jadeGroupEvalLimit; jg++) {
+                        var jadeGroupCandidate = jadeGroupCandidates[jg];
+                        var enhancedChefsForJade = buildEnhancedChefsForGroup(
+                            jadeGroupCandidate.group,
+                            false,
+                            [],
+                            pageEquipsByPosition,
+                            useEquip
+                        );
+                        var jadeGroupData = buildJadeRecipeCandidatesForGroup(
+                            jadeBaseRecipeData ? jadeBaseRecipeData.baseCandidates : [],
+                            enhancedChefsForJade
+                        );
+                        var jadeOptimization = optimizeJadeRecipeCombination(
+                            jadeGroupData.candidates,
+                            jadeBaseRecipeData ? jadeBaseRecipeData.availableRunes : [],
+                            jadeGroupCandidate.groupStats.guestRate,
+                            jadeGroupCandidate.groupStats.timeBonus - 100,
+                            jadeGroupCandidate.groupStats,
+                            settings.defaultTime * 3600,
+                            enhancedChefsForJade,
+                            recipes,
+                            onlyShowOwned
+                        );
+
+                        if (jadeOptimization && jadeOptimization.dailyJade > bestJadeScore) {
+                            bestJadeScore = jadeOptimization.dailyJade;
+                            bestGroup = jadeGroupCandidate.group;
+                            bestGroupStats = jadeGroupCandidate.groupStats;
+                        }
+                    }
+                } else {
+                    if (jadeReachedActualBilaiCandidates.length <= 1) {
+                        if (jadeReachedActualBilaiCandidates.length === 1) {
+                            bestGroup = jadeReachedActualBilaiCandidates[0].group;
+                            bestGroupStats = jadeReachedActualBilaiCandidates[0].groupStats;
+                        } else {
+                            bestGroup = highestGuestRateGroup;
+                            bestGroupStats = highestGuestRateStats;
+                        }
+                    } else {
+                        jadeReachedActualBilaiCandidates.sort(function(a, b) {
+                            return b.screenScore - a.screenScore;
+                        });
+                        for (var jb = 0; jb < jadeReachedActualBilaiCandidates.length; jb++) {
+                            var jadeBilaiCandidate = jadeReachedActualBilaiCandidates[jb];
+                            var enhancedChefsForBilai = buildEnhancedChefsForGroup(
+                                jadeBilaiCandidate.group,
+                                false,
+                                [],
+                                pageEquipsByPosition,
+                                useEquip
+                            );
+                            var jadeBilaiGroupData = buildJadeRecipeCandidatesForGroup(
+                                jadeBaseRecipeData ? jadeBaseRecipeData.baseCandidates : [],
+                                enhancedChefsForBilai
+                            );
+                            var bilaiOptimization = optimizeJadeRecipeCombination(
+                                jadeBilaiGroupData.candidates,
+                                jadeBaseRecipeData ? jadeBaseRecipeData.availableRunes : [],
+                                jadeBilaiCandidate.groupStats.guestRate,
+                                jadeBilaiCandidate.groupStats.timeBonus - 100,
+                                jadeBilaiCandidate.groupStats,
+                                settings.defaultTime * 3600,
+                                enhancedChefsForBilai,
+                                recipes,
+                                onlyShowOwned
+                            );
+
+                            if (bilaiOptimization && bilaiOptimization.dailyJade > bestJadeScore) {
+                                bestJadeScore = bilaiOptimization.dailyJade;
+                                bestGroup = jadeBilaiCandidate.group;
+                                bestGroupStats = jadeBilaiCandidate.groupStats;
+                            }
+                        }
+
+                        if (!bestGroup) {
+                            bestGroup = highestGuestRateGroup;
+                            bestGroupStats = highestGuestRateStats;
+                        }
+                    }
+                }
+            }
+
             // 查询必来模式：确定最终使用的组合
-            if (!isQueryEfficiencyMode) {
+            if (!isJadeMode && !isQueryEfficiencyMode) {
                 if (canAchieveBilai) {
                     // 有能达到必来的组合，使用百锅产出最高的
                     bestGroup = bestCanAchieveGroup;
@@ -1910,6 +3637,186 @@ var OneClickQuery = (function($) {
                 if (bestGroupStats) {
                 }
                 
+                return result;
+            }
+
+            if (isJadeMode) {
+                var finalJadeGroupData = buildJadeRecipeCandidatesForGroup(
+                    jadeBaseRecipeData ? jadeBaseRecipeData.baseCandidates : [],
+                    enhancedChefs
+                );
+                var finalJadeOptimization = optimizeJadeRecipeCombination(
+                    finalJadeGroupData.candidates,
+                    jadeBaseRecipeData ? jadeBaseRecipeData.availableRunes : [],
+                    totalGuestRate,
+                    totalTimeBonus,
+                    bestGroupStats,
+                    settings.defaultTime * 3600,
+                    enhancedChefs,
+                    recipes,
+                    onlyShowOwned
+                );
+
+                if (jadeBaseRecipeData && jadeBaseRecipeData.conflictCount > 0) {
+                    result.conflictInfo = jadeBaseRecipeData.conflictInfo;
+                    result.conflictCount = jadeBaseRecipeData.conflictCount;
+                }
+                if (finalJadeGroupData.cannotMakeCount > 0) {
+                    result.cannotMakeInfo = finalJadeGroupData.cannotMakeInfo;
+                    result.cannotMakeCount = finalJadeGroupData.cannotMakeCount;
+                }
+
+                if (!finalJadeOptimization || !finalJadeOptimization.selections.length) {
+                    return {
+                        success: false,
+                        chefs: finalChefs,
+                        recipes: [],
+                        useExistingChefs: useExistingChefs,
+                        pageEquipsByPosition: result.pageEquipsByPosition,
+                        message: '未找到满足所选符文条件的刷玉组合'
+                    };
+                }
+
+                var jadePositions = [];
+                var jadeTotalRecipes = 0;
+                var jadeTotalGodCount = 0;
+                var jadeCannotAchieveStarLevels = {};
+                var jadeCannotAchieveRecipes = [];
+
+                for (var js = 0; js < finalJadeOptimization.selections.length; js++) {
+                    var jadeSelection = finalJadeOptimization.selections[js];
+                    enhancedChefs[jadeSelection.chefIndex].recipes.push({
+                        recipe: jadeSelection.recipe,
+                        rank: jadeSelection.rank,
+                        rune: jadeSelection.rune || (jadeSelection.runeOptions[0] || null),
+                        quantity: jadeSelection.quantity,
+                        cookingTime: jadeSelection.cookingTime,
+                        canAchieveBilai: jadeSelection.canAchieveBilai
+                    });
+                }
+
+                for (var ji = 0; ji < enhancedChefs.length; ji++) {
+                    var jadeChefData = enhancedChefs[ji];
+                    var jadeChefRecipes = [];
+                    var jadeRecipeDetails = [];
+                    var jadeGodCount = 0;
+                    var jadeChefCookingTime = 0;
+
+                    for (var jj = 0; jj < jadeChefData.recipes.length; jj++) {
+                        var jadeRecipeData = jadeChefData.recipes[jj];
+                        var jadeRecipe = jadeRecipeData.recipe;
+
+                        jadeChefRecipes.push(jadeRecipe);
+                        jadeRecipeDetails.push({
+                            recipe: jadeRecipe,
+                            rank: jadeRecipeData.rank,
+                            rune: jadeRecipeData.rune,
+                            quantity: jadeRecipeData.quantity,
+                            cookingTime: jadeRecipeData.cookingTime,
+                            canAchieveBilai: jadeRecipeData.canAchieveBilai
+                        });
+
+                        if (jadeRecipeData.rank >= 4) {
+                            jadeGodCount++;
+                            jadeTotalGodCount++;
+                        }
+                        if (!jadeRecipeData.canAchieveBilai) {
+                            var jadeStarLevel = jadeRecipe.rarity || 5;
+                            jadeCannotAchieveStarLevels[jadeStarLevel] = true;
+                            jadeCannotAchieveRecipes.push(jadeRecipe.name);
+                        }
+
+                        jadeChefCookingTime += jadeRecipeData.cookingTime;
+                    }
+
+                    jadePositions.push({
+                        type: 'target',
+                        chef: jadeChefData.original,
+                        recipes: jadeChefRecipes,
+                        recipeDetails: jadeRecipeDetails,
+                        godCount: jadeGodCount,
+                        cookingTime: jadeChefCookingTime,
+                        auraBonus: getTotalSkillBonus(jadeChefData.auraBonus) > 0 ? jadeChefData.auraBonus : null,
+                        originalPosition: jadeChefData.originalPosition
+                    });
+
+                    result.recipes = result.recipes.concat(jadeChefRecipes);
+                    jadeTotalRecipes += jadeChefRecipes.length;
+                }
+
+                if (useExistingChefs && jadePositions.length > 0) {
+                    var sortedJadePositions = [];
+                    for (var jp = 0; jp < 3; jp++) {
+                        sortedJadePositions.push({
+                            type: 'empty',
+                            chef: null,
+                            recipes: [],
+                            recipeDetails: [],
+                            godCount: 0,
+                            cookingTime: 0,
+                            auraBonus: null,
+                            originalPosition: jp
+                        });
+                    }
+                    for (var jpos = 0; jpos < jadePositions.length; jpos++) {
+                        var jadePosition = jadePositions[jpos];
+                        var jadeOriginalPosition = jadePosition.originalPosition;
+                        if (jadeOriginalPosition !== undefined && jadeOriginalPosition >= 0 && jadeOriginalPosition < 3) {
+                            sortedJadePositions[jadeOriginalPosition] = jadePosition;
+                        }
+                    }
+                    jadePositions = sortedJadePositions;
+                }
+
+                result.positions = jadePositions;
+                result.totalGuestRate = totalGuestRate;
+                result.totalTimeBonus = totalTimeBonus;
+                result.totalCookingTime = finalJadeOptimization.totalCookingTime;
+                result.timeReached = finalJadeOptimization.totalCookingTime >= settings.defaultTime * 3600;
+                result.qualityLevel = getAverageQualityLevelFromSelections(finalJadeOptimization.selections);
+                result.dailyJade = finalJadeOptimization.dailyJade;
+                result.recipeJadeValueTotal = finalJadeOptimization.recipeJadeValueTotal;
+
+                var jadeCannotAchieveStarList = Object.keys(jadeCannotAchieveStarLevels).map(Number).sort();
+                if (jadeCannotAchieveStarList.length > 0) {
+                    result.cannotAchieveStarLevels = jadeCannotAchieveStarList;
+                    result.cannotAchieveRecipes = jadeCannotAchieveRecipes;
+                }
+                if (bestGroupStats && bestGroupStats.cannotAchieveBilai) {
+                    result.cannotAchieveBilai = true;
+                }
+
+                var calculatedStarLevelForJade = 5;
+                var calculatedQuantityForJade = 7;
+                if (bestGroupStats) {
+                    calculatedStarLevelForJade = bestGroupStats.calcStarLevel || 5;
+                    if (!isQueryEfficiencyMode && !bestGroupStats.canAchieveBilai && bestGroupStats.requiredPortions) {
+                        calculatedQuantityForJade = bestGroupStats.requiredPortions;
+                    } else {
+                        calculatedQuantityForJade = bestGroupStats.calcQuantity || 7;
+                    }
+                }
+                result.calculatedStarLevel = calculatedStarLevelForJade;
+                result.calculatedQuantity = calculatedQuantityForJade;
+
+                result.success = true;
+
+                var jadeMessage = '一键查询完成（日均玉璧' +
+                    (Math.floor(finalJadeOptimization.dailyJade * 100) / 100).toFixed(2) + '，' +
+                    jadeTotalGodCount + '/' + jadeTotalRecipes + '达神）';
+
+                var jadeWarningParts = [];
+                if (result.conflictCount > 0) {
+                    jadeWarningParts.push('冲突菜谱' + result.conflictCount + '个');
+                }
+                if (result.cannotMakeCount > 0) {
+                    jadeWarningParts.push('无法制作' + result.cannotMakeCount + '个');
+                }
+                if (jadeWarningParts.length > 0) {
+                    jadeMessage += ' [已排除: ' + jadeWarningParts.join('，') + ']';
+                }
+
+                result.message = jadeMessage;
                 return result;
             }
             
@@ -2151,6 +4058,7 @@ var OneClickQuery = (function($) {
             var round = 0;
             var maxRounds = 100;
             var continueAllocation = true;
+            var singleRecipePerRune = settings.singleRecipePerRune === true;
             
             
             while (continueAllocation && round < maxRounds) {
@@ -2231,13 +4139,24 @@ var OneClickQuery = (function($) {
                 if (allChefsFull) {
                     continueAllocation = false;
                 }
+
+                if (singleRecipePerRune) {
+                    continueAllocation = false;
+                }
             }
+
+            supplementPerRankChefRecipesInPlace(
+                enhancedChefs,
+                recipes,
+                onlyShowOwned
+            );
             
             
             // 构建结果（重新计算份数和制作时间）
             var positions = [];
             var totalRecipes = 0;
             totalCookingTime = 0; // 重新计算
+            var runeFinalSelections = [];
             
             
             // 收集无法达到必来的星级和菜谱名称
@@ -2255,15 +4174,31 @@ var OneClickQuery = (function($) {
                     var recipeData = chefData.recipes[j];
                     var recipe = recipeData.recipe;
                     
-                    // 计算份数
-                    var quantityResult = calculateRecipeQuantity(recipe, totalGuestRate, false);
-                    // 页面设置用必来份数（让用户知道需要多少份才能必来）
-                    var quantity = quantityResult.quantity;
-                    // 计算时间用实际可做份数（无法必来时使用最大份数）
-                    var quantityForTime = quantityResult.canAchieveBilai ? quantityResult.quantity : quantityResult.maxQuantity;
+                    var isFullPoolSupplement = recipeData.isFullPoolSupplement === true;
+                    var quantityResult;
+                    var quantity;
+                    var quantityForTime;
+
+                    if (isFullPoolSupplement) {
+                        quantityResult = {
+                            quantity: 1,
+                            canAchieveBilai: true,
+                            requiredPortions: 1,
+                            maxQuantity: 1
+                        };
+                        quantity = 1;
+                        quantityForTime = 1;
+                    } else {
+                        // 计算份数
+                        quantityResult = calculateRecipeQuantity(recipe, totalGuestRate, false);
+                        // 页面设置用必来份数（让用户知道需要多少份才能必来）
+                        quantity = quantityResult.quantity;
+                        // 计算时间用实际可做份数（无法必来时使用最大份数）
+                        quantityForTime = quantityResult.canAchieveBilai ? quantityResult.quantity : quantityResult.maxQuantity;
+                    }
                     
                     // 记录无法达到必来的星级和菜谱名称
-                    if (!quantityResult.canAchieveBilai) {
+                    if (!isFullPoolSupplement && !quantityResult.canAchieveBilai) {
                         var starLevel = recipe.rarity || 5;
                         cannotAchieveStarLevels[starLevel] = true;
                         cannotAchieveRecipes.push(recipe.name);
@@ -2279,7 +4214,13 @@ var OneClickQuery = (function($) {
                         rune: recipeData.rune,
                         quantity: quantity, // 页面设置用必来份数
                         cookingTime: cookingTime,
-                        canAchieveBilai: quantityResult.canAchieveBilai
+                        canAchieveBilai: quantityResult.canAchieveBilai,
+                        isFullPoolSupplement: isFullPoolSupplement
+                    });
+
+                    runeFinalSelections.push({
+                        rank: recipeData.rank,
+                        isFullPoolSupplement: isFullPoolSupplement
                     });
                     
                     if (recipeData.rank >= 4) godCount++;
@@ -2341,7 +4282,7 @@ var OneClickQuery = (function($) {
             result.totalTimeBonus = totalTimeBonus;
             result.totalCookingTime = totalCookingTime;
             result.timeReached = timeReached;
-            result.qualityLevel = bestGroupStats ? bestGroupStats.qualityLevel : "4";
+            result.qualityLevel = getAverageQualityLevelFromSelections(runeFinalSelections);
             
             // 记录无法达到必来的星级列表
             var cannotAchieveStarList = Object.keys(cannotAchieveStarLevels).map(Number).sort();
@@ -2439,6 +4380,8 @@ var OneClickQuery = (function($) {
      * 创建查询设置弹窗HTML
      */
     function createSettingsDialogHtml() {
+        var isJadeMode = $("#chk-guest-rate-submode").prop("checked");
+        var referenceButtonText = isJadeMode ? '金符文效率排行表' : '贵客必来对照表';
         var html = '<div class="modal fade" id="oneclick-settings-modal" tabindex="-1">';
         html += '<div class="modal-dialog modal-lg">';
         html += '<div class="modal-content">';
@@ -2447,7 +4390,7 @@ var OneClickQuery = (function($) {
         html += '<div class="modal-header settings-modal-header">';
         html += '<button type="button" class="close" data-dismiss="modal">&times;</button>';
         html += '<h4 class="modal-title">查询设置</h4>';
-        html += '<button type="button" class="btn btn-primary btn-sm" id="btn-guest-portion-table">贵客必来对照表</button>';
+        html += '<button type="button" class="btn btn-primary btn-sm" id="btn-query-reference-table">' + referenceButtonText + '</button>';
         html += '</div>';
         
         // 弹窗内容
@@ -2475,9 +4418,9 @@ var OneClickQuery = (function($) {
         html += '</div>';
         html += '</div>';
         
-        // 设置选项行2：使用场上已有配置
+        // 设置选项行2：使用场上已有配置 + 每种符文分配方式
         html += '<div class="row settings-row">';
-        html += '<div class="col-xs-12">';
+        html += '<div class="col-xs-6">';
         html += '<div class="setting-card">';
         html += '<label>使用场上已有配置</label>';
         html += '<div class="switch-container">';
@@ -2486,12 +4429,23 @@ var OneClickQuery = (function($) {
         html += '</div>';
         html += '</div>';
         html += '</div>';
+        html += '<div class="col-xs-6">';
+        html += '<div class="setting-card">';
+        html += '<label id="singleRecipePerRuneLabel">' + (settings.singleRecipePerRune ? '每种符文只查一个菜谱' : '每种符文平均分配') + '</label>';
+        html += '<div class="switch-container">';
+        html += '<input type="checkbox" id="setting-singleRecipePerRune"' + (settings.singleRecipePerRune ? ' checked' : '') + '>';
+        html += '<label for="setting-singleRecipePerRune" class="switch-label"></label>';
+        html += '</div>';
+        html += '</div>';
+        html += '</div>';
         html += '</div>';
         
         // 符文选择区域
         html += createRuneSelectionSection('gold', '金符文', GOLD_RUNES, settings.goldRuneSelections, settings.goldRuneExpanded);
-        html += createRuneSelectionSection('silver', '银符文', SILVER_RUNES, settings.silverRuneSelections, settings.silverRuneExpanded);
-        html += createRuneSelectionSection('bronze', '铜符文', BRONZE_RUNES, settings.bronzeRuneSelections, settings.bronzeRuneExpanded);
+        if (!isJadeMode) {
+            html += createRuneSelectionSection('silver', '银符文', SILVER_RUNES, settings.silverRuneSelections, settings.silverRuneExpanded);
+            html += createRuneSelectionSection('bronze', '铜符文', BRONZE_RUNES, settings.bronzeRuneSelections, settings.bronzeRuneExpanded);
+        }
         
         html += '</div>';
         
@@ -2503,6 +4457,402 @@ var OneClickQuery = (function($) {
         html += '</div></div></div>';
         
         return html;
+    }
+
+    function getJadeRankingRuneColumnIndex(tableData) {
+        if (!tableData || !Array.isArray(tableData.headers)) {
+            return -1;
+        }
+        return tableData.headers.indexOf('符文');
+    }
+
+    function getJadeRankingAvailableRunes(tableData) {
+        var runeColumnIndex = getJadeRankingRuneColumnIndex(tableData);
+        var rows = tableData && Array.isArray(tableData.rows) ? tableData.rows : [];
+        var runes = [];
+        var runeMap = {};
+        var i;
+        var runeValue;
+
+        if (runeColumnIndex < 0) {
+            return runes;
+        }
+
+        for (i = 0; i < rows.length; i++) {
+            runeValue = rows[i] && rows[i].length > runeColumnIndex ? String(rows[i][runeColumnIndex]).trim() : '';
+            if (!runeValue || runeMap[runeValue]) {
+                continue;
+            }
+            runeMap[runeValue] = true;
+            runes.push(runeValue);
+        }
+
+        return runes;
+    }
+
+    function getJadeRankingSelectedRunes() {
+        var $filter = $('#jade-ranking-rune-filter');
+        if (!$filter.length) {
+            return [];
+        }
+
+        var value = $filter.val();
+        if (!Array.isArray(value)) {
+            return value ? [value] : [];
+        }
+        return value.slice();
+    }
+
+    function createJadeRankingRuneFilterHtml(tableData) {
+        var availableRunes = getJadeRankingAvailableRunes(tableData);
+        if (!availableRunes.length) {
+            return '';
+        }
+
+        var html = '<div class="jade-ranking-filter-wrapper">';
+        html += '<select id="jade-ranking-rune-filter" class="selectpicker" multiple';
+        html += ' data-width="96px" data-size="6" data-actions-box="true"';
+        html += ' data-select-all-text="全选" data-deselect-all-text="清空"';
+        html += ' data-none-selected-text="全部符文" data-selected-text-format="count > 1"';
+        html += ' data-count-selected-text="已选{0}种" data-multiple-separator="、"';
+        html += ' title="全部符文">';
+        for (var i = 0; i < availableRunes.length; i++) {
+            html += '<option value="' + escapeHtml(availableRunes[i]) + '" selected>' + escapeHtml(availableRunes[i]) + '</option>';
+        }
+        html += '</select>';
+        html += '</div>';
+        return html;
+    }
+
+    function createJadeRankingTableRowsHtml(tableData, selectedRunes) {
+        if (!tableData || !tableData.rows || !tableData.rows.length) {
+            return '<tr><td colspan="1" class="jade-ranking-empty-cell">暂无数据</td></tr>';
+        }
+
+        var runeColumnIndex = getJadeRankingRuneColumnIndex(tableData);
+        var runeFilterMap = {};
+        var hasRuneFilter = Array.isArray(selectedRunes) && selectedRunes.length > 0;
+        var visibleRows = [];
+        var html = '';
+        var colSpan = tableData.headers && tableData.headers.length ? tableData.headers.length : 1;
+        var i;
+
+        if (hasRuneFilter) {
+            for (i = 0; i < selectedRunes.length; i++) {
+                runeFilterMap[selectedRunes[i]] = true;
+            }
+        }
+
+        for (i = 0; i < tableData.rows.length; i++) {
+            var row = tableData.rows[i];
+            var rowRune = runeColumnIndex >= 0 ? row[runeColumnIndex] : '';
+            if (hasRuneFilter && !runeFilterMap[rowRune]) {
+                continue;
+            }
+            visibleRows.push(row);
+        }
+
+        if (!visibleRows.length) {
+            return '<tr><td colspan="' + colSpan + '" class="jade-ranking-empty-cell">当前筛选无数据</td></tr>';
+        }
+
+        for (i = 0; i < visibleRows.length; i++) {
+            html += '<tr>';
+            for (var c = 0; c < visibleRows[i].length; c++) {
+                html += '<td>' + escapeHtml(visibleRows[i][c]) + '</td>';
+            }
+            html += '</tr>';
+        }
+
+        return html;
+    }
+
+    function createJadeRankingTableContentHtml(tableData, errorMessage, selectedRunes) {
+        if (errorMessage) {
+            return '<div class="jade-ranking-loading jade-ranking-error">' + escapeHtml(errorMessage) + '</div>';
+        }
+
+        if (!tableData || !tableData.headers || !tableData.rows) {
+            return '<div class="jade-ranking-loading jade-ranking-error">加载失败</div>';
+        }
+
+        var title = escapeHtml(tableData.title || '金符文效率排行表');
+        var html = '<div class="jade-ranking-table-container">';
+        html += '<div class="jade-ranking-sheet">';
+        html += '<table class="table table-bordered jade-ranking-table">';
+        html += '<thead>';
+        html += '<tr class="jade-ranking-title-row"><th colspan="' + tableData.headers.length + '">' + title + '</th></tr>';
+        html += '<tr class="jade-ranking-header-row">';
+        for (var i = 0; i < tableData.headers.length; i++) {
+            html += '<th>' + escapeHtml(tableData.headers[i]) + '</th>';
+        }
+        html += '</tr>';
+        html += '</thead>';
+        html += '<tbody>' + createJadeRankingTableRowsHtml(tableData, selectedRunes) + '</tbody>';
+        html += '</table>';
+        html += '</div>';
+        html += '</div>';
+        return html;
+    }
+
+    function renderJadeRankingTableRows(tableData) {
+        var $tbody = $('#jade-ranking-table-modal .jade-ranking-table tbody');
+        if (!$tbody.length || !tableData || !tableData.headers || !tableData.rows) {
+            return;
+        }
+        $tbody.html(createJadeRankingTableRowsHtml(tableData, getJadeRankingSelectedRunes()));
+    }
+
+    function initJadeRankingRuneFilter(tableData) {
+        var $filter = $('#jade-ranking-rune-filter');
+        if (!$filter.length || !tableData || !tableData.rows || !tableData.rows.length) {
+            return;
+        }
+
+        if ($.fn.selectpicker) {
+            $filter.selectpicker();
+        }
+
+        $filter.off('.jadeRankingFilter')
+            .on('changed.bs.select.jadeRankingFilter change.jadeRankingFilter', function() {
+                renderJadeRankingTableRows(tableData);
+                scheduleJadeRankingModalWidthUpdate();
+            });
+    }
+
+    function openJadeRankingTableDialog(tableData, errorMessage) {
+        $('#jade-ranking-table-modal').remove();
+
+        var html = '<div class="modal fade" id="jade-ranking-table-modal" tabindex="-1">';
+        html += '<div class="modal-dialog">';
+        html += '<div class="modal-content">';
+        html += '<div class="modal-header jade-ranking-modal-header">';
+        html += '<div class="jade-ranking-modal-header-main">';
+        html += '<h4 class="modal-title">金符文效率排行表</h4>';
+        html += createJadeRankingRuneFilterHtml(tableData);
+        html += '<button type="button" class="close jade-ranking-close" data-dismiss="modal">&times;</button>';
+        html += '</div>';
+        html += '</div>';
+        html += '<div class="modal-body">';
+        html += createJadeRankingTableContentHtml(tableData, errorMessage, getJadeRankingAvailableRunes(tableData));
+        html += '</div>';
+        html += '<div class="modal-footer">';
+        html += '<button type="button" class="btn btn-default" data-dismiss="modal">关闭</button>';
+        html += '</div>';
+        html += '</div></div></div>';
+
+        $('body').append(html);
+        initJadeRankingRuneFilter(tableData);
+        prepareJadeRankingModalWidth();
+        $('#jade-ranking-table-modal')
+            .off('shown.bs.modal.jadeRankingLayout')
+            .on('shown.bs.modal.jadeRankingLayout', function() {
+                scheduleJadeRankingModalWidthUpdate();
+                enableDragScrollForJadeRanking();
+            })
+            .modal('show');
+    }
+
+    function showJadeRankingTableDialog() {
+        if (jadeRankingTableDataCache) {
+            openJadeRankingTableDialog(jadeRankingTableDataCache);
+            return;
+        }
+
+        preloadJadeRankingTableData(false, function(response, error) {
+            if (error || !response) {
+                openJadeRankingTableDialog(null, '加载失败');
+                return;
+            }
+            openJadeRankingTableDialog(response);
+        });
+    }
+
+    function prepareJadeRankingModalWidth() {
+        var $modal = $('#jade-ranking-table-modal');
+        if (!$modal.length) {
+            return;
+        }
+
+        $modal.css({
+            display: 'block',
+            visibility: 'hidden',
+            pointerEvents: 'none'
+        });
+
+        updateJadeRankingModalWidth();
+
+        $modal.css({
+            display: '',
+            visibility: '',
+            pointerEvents: ''
+        });
+    }
+
+    function scheduleJadeRankingModalWidthUpdate(done) {
+        var attempt = 0;
+
+        function runUpdate() {
+            updateJadeRankingModalWidth();
+            attempt++;
+            if (attempt < 3) {
+                setTimeout(runUpdate, 60);
+            } else if (typeof done === 'function') {
+                done();
+            }
+        }
+
+        if (typeof window.requestAnimationFrame === 'function') {
+            window.requestAnimationFrame(function() {
+                window.requestAnimationFrame(runUpdate);
+            });
+            return;
+        }
+
+        setTimeout(runUpdate, 0);
+    }
+
+    function updateJadeRankingModalWidth() {
+        var $modal = $('#jade-ranking-table-modal');
+        var $dialog = $modal.find('.modal-dialog');
+        var $body = $modal.find('.modal-body');
+        var $header = $modal.find('.modal-header');
+        var $table = $modal.find('.jade-ranking-table');
+        if (!$dialog.length) {
+            return;
+        }
+
+        if (!$table.length) {
+            $dialog.css('width', '');
+            return;
+        }
+
+        var viewportWidth = Math.max($(window).width() || 0, window.innerWidth || 0);
+        if (!viewportWidth) {
+            $dialog.css('width', '');
+            return;
+        }
+
+        var isMobileViewport = viewportWidth <= 768;
+        var bodyPaddingLeft = parseFloat($body.css('padding-left')) || 0;
+        var bodyPaddingRight = parseFloat($body.css('padding-right')) || 0;
+        var bodyHorizontalPadding = bodyPaddingLeft + bodyPaddingRight;
+        var bodyElement = $body.get(0);
+        var bodyScrollbarWidth = 0;
+        if (bodyElement) {
+            bodyScrollbarWidth = Math.max(0, bodyElement.offsetWidth - bodyElement.clientWidth);
+        }
+        var tableElement = $table.get(0);
+        var tableWidth = Math.ceil((tableElement && tableElement.scrollWidth) || $table.outerWidth() || 0);
+        var headerElement = $header.get(0);
+        var headerWidth = Math.ceil((headerElement && headerElement.scrollWidth) || $header.outerWidth() || 0);
+        var targetWidth = Math.max(tableWidth + bodyHorizontalPadding + bodyScrollbarWidth + 2, headerWidth + 2);
+        var fallbackWidth = Math.max(280, viewportWidth - 20);
+
+        if (isMobileViewport) {
+            var sideGap = 10;
+            var maxDialogWidth = Math.max(280, viewportWidth - sideGap * 2);
+            if (targetWidth > maxDialogWidth) {
+                targetWidth = maxDialogWidth;
+            }
+        }
+
+        if (targetWidth <= 0) {
+            targetWidth = fallbackWidth;
+        }
+
+        $dialog.css('width', targetWidth + 'px');
+    }
+
+    function escapeHtml(text) {
+        if (text === null || text === undefined) {
+            return '';
+        }
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function enableDragScrollForJadeRanking() {
+        var $body = $('#jade-ranking-table-modal .modal-body');
+        var $container = $('#jade-ranking-table-modal .jade-ranking-table-container');
+        var viewportWidth = Math.max($(window).width() || 0, window.innerWidth || 0);
+        if (!$body.length || !$container.length) {
+            return;
+        }
+
+        if (viewportWidth > 768) {
+            return;
+        }
+
+        var body = $body.get(0);
+        var container = $container.get(0);
+        if (!body || !container || body.__jadeDragScrollBound) {
+            return;
+        }
+
+        body.__jadeDragScrollBound = true;
+        $container.addClass('jade-ranking-draggable');
+
+        var state = {
+            active: false,
+            startX: 0,
+            startY: 0,
+            scrollLeft: 0,
+            scrollTop: 0
+        };
+
+        function getPoint(event) {
+            if (event.touches && event.touches.length) {
+                return event.touches[0];
+            }
+            if (event.changedTouches && event.changedTouches.length) {
+                return event.changedTouches[0];
+            }
+            return event;
+        }
+
+        function start(event) {
+            var point = getPoint(event);
+            state.active = true;
+            state.startX = point.clientX;
+            state.startY = point.clientY;
+            state.scrollLeft = container.scrollLeft;
+            state.scrollTop = body.scrollTop;
+            $container.addClass('drag-scrolling');
+        }
+
+        function move(event) {
+            if (!state.active) {
+                return;
+            }
+
+            var point = getPoint(event);
+            var deltaX = point.clientX - state.startX;
+            var deltaY = point.clientY - state.startY;
+            container.scrollLeft = state.scrollLeft - deltaX;
+            body.scrollTop = state.scrollTop - deltaY;
+
+            if (event.cancelable) {
+                event.preventDefault();
+            }
+        }
+
+        function end() {
+            state.active = false;
+            $container.removeClass('drag-scrolling');
+        }
+
+        body.addEventListener('touchstart', start, { passive: true });
+        body.addEventListener('touchmove', move, { passive: false });
+        body.addEventListener('touchend', end);
+        body.addEventListener('touchcancel', end);
+        body.addEventListener('mousedown', start);
+        window.addEventListener('mousemove', move);
+        window.addEventListener('mouseup', end);
     }
 
     /**
@@ -2565,6 +4915,8 @@ var OneClickQuery = (function($) {
             
             if (id === 'queryMode') {
                 $('#queryModeLabel').text(checked ? '查询效率' : '查询必来');
+            } else if (id === 'singleRecipePerRune') {
+                $('#singleRecipePerRuneLabel').text(checked ? '每种符文只查一个菜谱' : '每种符文平均分配');
             }
         });
         
@@ -2627,8 +4979,12 @@ var OneClickQuery = (function($) {
         });
         
         // 贵客必来对照表按钮点击事件
-        $modal.find('#btn-guest-portion-table').on('click', function() {
-            showGuestPortionTableDialog();
+        $modal.find('#btn-query-reference-table').on('click', function() {
+            if ($("#chk-guest-rate-submode").prop("checked")) {
+                showJadeRankingTableDialog();
+            } else {
+                showGuestPortionTableDialog();
+            }
         });
     }
     
@@ -2908,6 +5264,8 @@ var OneClickQuery = (function($) {
      */
     function init() {
         loadSettings();
+        loadJadeRecipeValueMap();
+        preloadJadeRankingTableData(false);
         
         // 绑定一键查询按钮事件
         $(document).on('click', '#btn-oneclick-query', function() {
@@ -2932,10 +5290,35 @@ var OneClickQuery = (function($) {
                 showAlert(result.message || '查询失败');
             }
         });
+
+        $(document).on('click', '#btn-oneclick-query-jade', function() {
+            var result = executeQuery();
+            if (result && result.success) {
+                var skipChefUpdate = result.useExistingChefs || false;
+                applyResultToSelectors(result, skipChefUpdate);
+
+                if (result.cannotAchieveRecipes && result.cannotAchieveRecipes.length > 0) {
+                    var recipeNames = result.cannotAchieveRecipes.map(function(name) {
+                        return '<span style="color:#337ab7;font-weight:bold;">' + name + '</span>';
+                    }).join('、');
+                    showAlert(recipeNames + ' 无法做到必来，已按当前刷玉查询结果填充份数');
+                }
+            } else if (result) {
+                showAlert(result.message || '查询失败');
+            }
+        });
         
         // 绑定查询设置按钮事件
         $(document).on('click', '#btn-query-settings', function() {
             showSettingsDialog();
+        });
+
+        $(document).on('click', '#btn-query-settings-jade', function() {
+            showSettingsDialog();
+        });
+
+        $(window).off('resize.jadeRankingModal').on('resize.jadeRankingModal', function() {
+            updateJadeRankingModalWidth();
         });
     }
     
