@@ -2640,12 +2640,11 @@ table.dataTable tr.selected td.select-checkbox:after,table.dataTable tr.selected
 /* 查询设置弹窗样式 */
 #oneclick-settings-modal .modal-body {
     max-height: 70vh;
-    overflow-y: auto;
-    overflow-x: hidden;
+    overflow: visible;
 }
 
 #oneclick-settings-modal .modal-content {
-    overflow: hidden;
+    overflow: visible;
 }
 
 /* 厨具选择框容器需要允许溢出 */
@@ -2836,12 +2835,52 @@ table.dataTable tr.selected td.select-checkbox:after,table.dataTable tr.selected
     #oneclick-settings-modal .settings-row > .col-xs-6:has(#setting-useExistingConfig) {
         margin-bottom: 10px;
     }
+
+    #oneclick-settings-modal .settings-row:first-of-type > .col-xs-6 > .setting-card {
+        height: 44px;
+        min-height: 44px;
+        box-sizing: border-box;
+        padding-top: 0;
+        padding-bottom: 0;
+    }
+
+    #oneclick-settings-modal .settings-row:first-of-type > .col-xs-6:first-child .setting-card {
+        justify-content: flex-start;
+        gap: 4px;
+    }
+
+    #oneclick-settings-modal .settings-row:first-of-type > .col-xs-6:first-child .setting-card label {
+        width: 2em;
+        flex: 0 0 2em;
+        min-width: 0;
+        margin-right: 0;
+    }
+
+    #oneclick-settings-modal .settings-row:first-of-type > .col-xs-6:first-child .setting-card .input-group {
+        width: 100%;
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+
+    #oneclick-settings-modal #setting-defaultTime {
+        width: 100%;
+        min-width: 4.8em;
+        max-width: none;
+        padding-left: 6px;
+        padding-right: 6px;
+        text-align: center;
+    }
+
+    #oneclick-settings-modal .settings-row:first-of-type > .col-xs-6:first-child .input-group-addon {
+        padding-left: 6px;
+        padding-right: 6px;
+        white-space: nowrap;
+    }
 }
 
 @media (max-width: 480px) {
     #oneclick-settings-modal .modal-dialog {
         margin: 10px;
-        max-height: calc(100vh - 20px);
     }
 
     #oneclick-settings-modal .settings-row {
@@ -2885,30 +2924,45 @@ table.dataTable tr.selected td.select-checkbox:after,table.dataTable tr.selected
         min-width: 0;
     }
 
-    #oneclick-settings-modal .settings-row:first-of-type > .col-xs-6:first-child {
-        width: 58%;
-    }
-
-    #oneclick-settings-modal .settings-row:first-of-type > .col-xs-6:last-child {
-        width: 42%;
+    #oneclick-settings-modal .settings-row:first-of-type > .col-xs-6 > .setting-card {
+        height: 44px;
+        min-height: 44px;
+        box-sizing: border-box;
+        padding-top: 0;
+        padding-bottom: 0;
     }
 
     #oneclick-settings-modal .settings-row:first-of-type > .col-xs-6:first-child .setting-card {
         justify-content: flex-start;
-        gap: 8px;
+        gap: 4px;
+    }
+
+    #oneclick-settings-modal .settings-row:first-of-type > .col-xs-6:first-child .setting-card label {
+        width: 2em;
+        flex: 0 0 2em;
+        min-width: 0;
+        margin-right: 0;
     }
 
     #oneclick-settings-modal .settings-row:first-of-type > .col-xs-6:first-child .setting-card .input-group {
-        flex: 0 1 auto;
-        min-width: 126px;
-    }
-
-    #oneclick-settings-modal .settings-row:first-of-type > .col-xs-6:first-child .setting-card .form-control {
+        width: 100%;
+        flex: 1 1 auto;
         min-width: 0;
     }
 
-    #oneclick-settings-modal .settings-row:first-of-type > .col-xs-6:last-child .setting-card {
-        justify-content: space-between;
+    #oneclick-settings-modal #setting-defaultTime {
+        width: 100%;
+        min-width: 4.8em;
+        max-width: none;
+        padding-left: 6px;
+        padding-right: 6px;
+        text-align: center;
+    }
+
+    #oneclick-settings-modal .settings-row:first-of-type > .col-xs-6:first-child .input-group-addon {
+        padding-left: 6px;
+        padding-right: 6px;
+        white-space: nowrap;
     }
 
     #oneclick-settings-modal .setting-card .switch-container {
@@ -2946,26 +3000,6 @@ table.dataTable tr.selected td.select-checkbox:after,table.dataTable tr.selected
 
     #oneclick-settings-modal .rune-item {
         min-width: 100%;
-    }
-
-    #oneclick-settings-modal .modal-content {
-        max-height: calc(100vh - 20px);
-        display: flex;
-        flex-direction: column;
-    }
-
-    #oneclick-settings-modal .modal-body {
-        flex: 1 1 auto;
-        min-height: 0;
-        overflow-y: auto;
-        overflow-x: hidden;
-    }
-
-    #oneclick-settings-modal .rune-section,
-    #oneclick-settings-modal .rune-list,
-    #oneclick-settings-modal .rune-item,
-    #oneclick-settings-modal .collapse {
-        max-width: 100%;
     }
     
     .calc-header-buttons .btn {

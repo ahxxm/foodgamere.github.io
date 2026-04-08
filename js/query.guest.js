@@ -4457,7 +4457,7 @@ var OneClickQuery = (function($) {
         html += '<div class="row settings-row">';
         html += '<div class="col-xs-6">';
         html += '<div class="setting-card">';
-        html += '<label>开业时间</label>';
+        html += '<label>开业</label>';
         html += '<div class="input-group input-group-sm">';
         html += '<input type="number" class="form-control" id="setting-defaultTime" value="' + settings.defaultTime + '" min="0" max="24" step="0.1">';
         html += '<span class="input-group-addon">小时</span>';

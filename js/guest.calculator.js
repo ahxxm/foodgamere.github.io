@@ -804,7 +804,8 @@ var GuestRateCalculator = (function($) {
         $select.empty();
 
         if (!materialDetails || !materialDetails.totalMaterials.length) {
-            $select.append('<option value=""></option>');
+            $select.append('<option value="">无耗材</option>');
+            $select.prop('selectedIndex', 0);
             $select.prop('disabled', false);
             if ($select.data('selectpicker')) {
                 $select.selectpicker('refresh');
