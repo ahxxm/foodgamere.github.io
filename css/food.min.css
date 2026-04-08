@@ -2962,6 +2962,14 @@ table.dataTable tr.selected td.select-checkbox:after,table.dataTable tr.selected
         word-break: keep-all;
     }
 
+    #oneclick-settings-modal .setting-card label.switch-label {
+        width: 30px;
+        min-width: 30px;
+        max-width: 30px;
+        flex: 0 0 30px;
+        margin: 0;
+    }
+
     #oneclick-settings-modal .setting-card .input-group {
         width: auto;
         flex: 1 1 auto;
