@@ -592,12 +592,13 @@ var GuestRateCalculator = (function($) {
     }
 
     function calculateJadeModeOutputs() {
+        var jadeBusinessIntervalSeconds = 30;
         var totalTimeSeconds = getCurrentTotalTimeSeconds();
         var actualGuestRate = parseFloat($("#actual-guest-rate").text()) || 0;
         var runeRate = parseFloat($("#rune-rate").text()) || 0;
         var critRate = parseFloat($("#total-crit-rate").text()) || 0;
         var scatterRate = Math.max(0, 100 - runeRate);
-        var dailyCycles = totalTimeSeconds > 0 ? 86400 / totalTimeSeconds : 0;
+        var dailyCycles = totalTimeSeconds > 0 ? 86400 / (totalTimeSeconds + jadeBusinessIntervalSeconds) : 0;
         var critMultiplier = critRate / 100;
         var recipeJadeValueTotal = getCurrentJadeRecipeValueTotal();
         var dailyJade = dailyCycles * (actualGuestRate / 100) * (scatterRate / 100) * critMultiplier * recipeJadeValueTotal;

@@ -2675,10 +2675,11 @@ var OneClickQuery = (function($) {
         totalTimeSum = usageState.totalTimeSum;
         totalValueSum = usageState.totalValueSum;
 
+        var jadeBusinessIntervalSeconds = 30;
         var actualGuestRate = groupStats ? (groupStats.actualGuestRate || 0) : 0;
         var critRate = groupStats ? (groupStats.critRate || 0) : 0;
         var scatterRate = Math.max(0, 100 - (groupStats ? (groupStats.runeRate || 0) : 0));
-        var dailyCycles = totalTimeSum > 0 ? 86400 / totalTimeSum : 0;
+        var dailyCycles = totalTimeSum > 0 ? 86400 / (totalTimeSum + jadeBusinessIntervalSeconds) : 0;
         var dailyJade = dailyCycles * (actualGuestRate / 100) * (scatterRate / 100) * (critRate / 100) * totalValueSum;
 
         return {
@@ -4973,7 +4974,7 @@ var OneClickQuery = (function($) {
             if (id === 'queryMode') {
                 $('#queryModeLabel').text(checked ? '查询效率' : '查询必来');
             } else if (id === 'singleRecipePerRune') {
-                $('#singleRecipePerRuneLabel').text(checked ? '每种符文只查一个菜谱' : '每种符文平均分配');
+                $('#singleRecipePerRuneLabel').text(checked ? '每种只查一个' : '符文平均分配');
             }
         });
         
