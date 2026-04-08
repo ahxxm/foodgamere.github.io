@@ -2093,6 +2093,18 @@ table.dataTable tr.selected td.select-checkbox:after,table.dataTable tr.selected
     justify-content: flex-start;
 }
 
+.calc-result-row.calc-material-row .calc-material-label {
+    flex: 0 0 auto;
+}
+
+.calc-result-row.calc-material-row .calc-material-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+    min-width: 0;
+}
+
 .calc-result-row.calc-material-row .calc-result-item {
     display: inline-flex;
     align-items: center;
@@ -2393,6 +2405,27 @@ table.dataTable tr.selected td.select-checkbox:after,table.dataTable tr.selected
 
 /* 响应式调整 */
 @media (max-width: 768px) {
+    .calc-result-row.calc-material-row {
+        display: inline-flex !important;
+        width: auto !important;
+        max-width: 100%;
+        justify-content: flex-start !important;
+        align-self: flex-start;
+        gap: 6px;
+    }
+
+    .calc-result-row.calc-material-row .calc-result-item,
+    .calc-result-row.calc-material-row .calc-result-item:first-child,
+    .calc-result-row.calc-material-row .calc-result-item:last-child,
+    .calc-result-row.calc-material-row .calc-material-actions {
+        flex: 0 0 auto !important;
+    }
+
+    #daily-material-select-jade + .bootstrap-select,
+    #daily-material-select-jade + .bootstrap-select > .dropdown-toggle {
+        min-width: 100px !important;
+    }
+
     .calc-result-row {
         /* 保持横向排列，自动换行 */
         flex-wrap: wrap;
@@ -2476,6 +2509,18 @@ table.dataTable tr.selected td.select-checkbox:after,table.dataTable tr.selected
 
 /* 超小屏幕 */
 @media (max-width: 450px) {
+    .calc-result-row.calc-material-row {
+        display: inline-flex !important;
+        width: auto !important;
+        max-width: 100%;
+        justify-content: flex-start !important;
+        gap: 6px;
+    }
+
+    .calc-result-row.calc-material-row .calc-material-actions {
+        gap: 6px;
+    }
+
     /* 调整为2+1布局：前两项一行，按钮单独一行 */
     .calc-result-row.calc-data-row {
         display: grid;
@@ -2506,6 +2551,11 @@ table.dataTable tr.selected td.select-checkbox:after,table.dataTable tr.selected
         font-size: 13px;
         padding: 6px 12px;
         width: auto;
+    }
+
+    #daily-material-select-jade + .bootstrap-select,
+    #daily-material-select-jade + .bootstrap-select > .dropdown-toggle {
+        min-width: 100px !important;
     }
 
     .calc-result-item .bootstrap-select.material-daily-select,

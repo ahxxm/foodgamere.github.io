@@ -771,12 +771,12 @@ var GuestRateCalculator = (function($) {
         var font = computedStyle && computedStyle.font ? computedStyle.font : '13px Arial';
         var textWidth = Math.ceil(measureJadeMaterialTextWidth(visibleText, font));
         var basePadding = 34;
-        var desiredWidth = Math.max(80, textWidth + basePadding);
+        var desiredWidth = Math.max(100, textWidth + basePadding);
         var rowWidth = $row.innerWidth() || 0;
         var labelWidth = $row.find(".calc-result-item:first-child > label").outerWidth(true) || 0;
         var buttonWidth = $button.outerWidth(true) || 0;
         var gap = parseFloat($row.css("column-gap")) || parseFloat($row.css("gap")) || 0;
-        var availableWidth = rowWidth ? Math.max(80, rowWidth - labelWidth - buttonWidth - gap * 2 - 16) : desiredWidth;
+        var availableWidth = rowWidth ? Math.max(100, rowWidth - labelWidth - buttonWidth - gap * 2 - 16) : desiredWidth;
         var targetWidth = Math.min(desiredWidth, availableWidth);
 
         $wrapper.css("width", targetWidth + "px");
