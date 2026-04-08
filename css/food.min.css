@@ -2862,10 +2862,13 @@ table.dataTable tr.selected td.select-checkbox:after,table.dataTable tr.selected
     }
 
     #oneclick-settings-modal .switch-label {
-        width: 34px;
+        width: 30px;
+        min-width: 30px;
+        max-width: 30px;
         height: 18px;
         border-radius: 9px;
         overflow: hidden;
+        flex: 0 0 30px;
     }
 
     #oneclick-settings-modal .switch-label::after {
@@ -2877,6 +2880,16 @@ table.dataTable tr.selected td.select-checkbox:after,table.dataTable tr.selected
 
     #oneclick-settings-modal input[type="checkbox"]:checked + .switch-label::after {
         left: calc(100% - 16px);
+    }
+
+    #oneclick-settings-modal .setting-card .switch-container {
+        flex: 0 0 30px;
+        width: 30px;
+        min-width: 30px;
+        max-width: 30px;
+        display: flex;
+        justify-content: flex-end;
+        overflow: hidden;
     }
 
     #oneclick-settings-modal .settings-row:first-of-type > .col-xs-6:first-child .setting-card {
