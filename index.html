@@ -23,11 +23,11 @@
     <link rel="stylesheet" type="text/css" href="css/food.min.css?v=81" />
     <script type="text/javascript" src="js/guest.calculator.js?v=4"></script>
     <script type="text/javascript" src="js/query.guest.js?v=3"></script>
-    <script type="text/javascript" src="js/food.min.js?v=268"></script>
+    <script type="text/javascript" src="js/food.min.js?v=270"></script>
     <script type="text/javascript" src="js/query.cultivate.js?v=4"></script>
     <script type="text/javascript" src="js/query.collection.js?v=5"></script>
     <script type="text/javascript" src="js/banquet.optimizer.js?v=2"></script>
-    <script type="text/javascript" src="js/jianghu.optimizer.js?v=2"></script>
+    <script type="text/javascript" src="js/jianghu.optimizer.js?v=4"></script>
     <script type="text/javascript" src="js/competition.optimizer.simple.js?v=2"></script>
     <link rel="stylesheet" type="text/css" href="css/image.css?v=174" />
     <link rel="stylesheet" type="text/css" href="css/query.collection.css?v=4" />
@@ -2295,6 +2295,29 @@
                                             <span class="value" id="hundred-pot-output">5.02</span>
                                         </div>
                                     </div>
+                                    <div class="calc-material-group">
+                                        <div class="calc-result-row calc-material-row">
+                                            <div class="calc-result-item calc-material-label">
+                                                <label>日均符文:</label>
+                                            </div>
+                                            <div class="calc-material-actions">
+                                                <select class="selectpicker material-daily-select" id="daily-rune-select" data-width="140px" data-container="body" data-none-selected-text="无菜谱">
+                                                    <option value="">无菜谱</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div class="calc-result-row calc-material-row">
+                                            <div class="calc-result-item calc-material-label">
+                                                <label>日均耗材:</label>
+                                            </div>
+                                            <div class="calc-material-actions">
+                                                <select class="selectpicker material-daily-select" id="daily-material-select" data-width="140px" data-container="body" data-none-selected-text="无耗材">
+                                                    <option value="">无耗材</option>
+                                                </select>
+                                                <button class="btn btn-default btn-sm" id="btn-material-detail" type="button">耗材详情</button>
+                                            </div>
+                                        </div>
+                                    </div>
                                     <div class="calc-result-row calc-controls">
                                         <div class="calc-control-group">
                                             <label>星级</label>
@@ -2431,6 +2454,20 @@
                                                 <span>总实际贵客率:</span>
                                                 <span class="value highlight" id="total-guest-rate">20.1%</span>
                                             </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="modal fade" id="guest-material-detail-modal" tabindex="-1" role="dialog" aria-labelledby="guest-material-detail-title">
+                                <div class="modal-dialog" role="document">
+                                    <div class="modal-content">
+                                        <div class="modal-header">
+                                            <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                                            <h4 class="modal-title" id="guest-material-detail-title">符文模式耗材详情</h4>
+                                        </div>
+                                        <div class="modal-body" id="guest-material-detail-body">
+                                            暂无耗材数据
                                         </div>
                                     </div>
                                 </div>
